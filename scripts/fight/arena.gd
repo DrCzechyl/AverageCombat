@@ -284,8 +284,7 @@ func _step_ko() -> void:
 		if phase_ticks % 2 == 1:
 			simulate = false
 	if simulate:
-		p1.tick(InputRouter.blank())
-		p2.tick(InputRouter.blank())
+		_tick_fighters_presentation()
 		_update_projectiles()
 		_handle_landings()
 		_update_combos()
@@ -298,8 +297,7 @@ func _step_ko() -> void:
 
 func _step_round_end() -> void:
 	phase_ticks -= 1
-	p1.tick(InputRouter.blank())
-	p2.tick(InputRouter.blank())
+	_tick_fighters_presentation()
 	if phase_ticks <= 0:
 		round_number += 1
 		_start_round()
@@ -307,8 +305,7 @@ func _step_round_end() -> void:
 
 func _step_match_end() -> void:
 	phase_ticks -= 1
-	p1.tick(InputRouter.blank())
-	p2.tick(InputRouter.blank())
+	_tick_fighters_presentation()
 	if phase_ticks <= 0:
 		_finish_match()
 
@@ -328,6 +325,10 @@ func _update_camera() -> void:
 
 
 func _resolve_melee() -> void:
+	# Capture every eligible contact before either fighter is mutated. Applying
+	# P1 first used to cancel an overlapping P2 hit, so equal lethal jabs became
+	# a sole P1 KO and an armored P1 never took the trade.
+	var contacts: Array[Dictionary] = []
 	for i in 2:
 		var attacker: Fighter = p1 if i == 0 else p2
 		var defender: Fighter = p2 if i == 0 else p1
@@ -338,26 +339,37 @@ func _resolve_melee() -> void:
 			continue
 		if not hit["rect"].intersects(defender.hurtbox()):
 			continue
-		_apply_attack(i, defender, hit)
+		contacts.append({
+			"attacker_index": i,
+			"defender": defender,
+			"hit": hit.duplicate(true),
+			"blocked": defender.is_guarding(str(hit["height"])),
+			"dir": attacker.facing,
+		})
+	for contact in contacts:
+		_apply_attack(int(contact["attacker_index"]), contact["defender"],
+				contact["hit"], bool(contact["blocked"]), int(contact["dir"]))
 
 
-func _apply_attack(attacker_index: int, defender: Fighter, hit: Dictionary) -> void:
+func _apply_attack(attacker_index: int, defender: Fighter, hit: Dictionary,
+		blocked: bool, dir: int) -> void:
 	var attacker: Fighter = p1 if attacker_index == 0 else p2
 	attacker.move_has_hit = true
-	var blocked := defender.is_guarding(str(hit["height"]))
-	var dir := attacker.facing
 	var info: Dictionary = hit["move"].duplicate(true)
 	info["damage"] = float(hit["damage"])
 
 	var scale := 1.0
 	if not blocked:
 		scale = maxf(0.35, 1.0 - 0.09 * float(defender.combo_received))
+	var hp_before := defender.health
 	var result := defender.take_hit(info, blocked, dir, scale)
-	_register_hit(attacker_index, attacker, defender, hit, info, result, blocked)
+	var hp_lost := maxf(0.0, hp_before - defender.health)
+	_register_hit(attacker_index, attacker, defender, hit, info, result, blocked, hp_lost)
 
 
 func _register_hit(attacker_index: int, attacker: Fighter, defender: Fighter,
-		hit: Dictionary, info: Dictionary, result: Dictionary, blocked: bool) -> void:
+		hit: Dictionary, info: Dictionary, result: Dictionary, blocked: bool,
+		hp_lost: float) -> void:
 	if bool(result.get("ko", false)):
 		blocked = false
 	var contact: Vector2 = hit["rect"].get_center()
@@ -383,7 +395,9 @@ func _register_hit(attacker_index: int, attacker: Fighter, defender: Fighter,
 		combo[attacker_index] += 1
 		combo_damage[attacker_index] += float(result["damage"])
 		best_combo[attacker_index] = maxi(best_combo[attacker_index], combo[attacker_index])
-		damage_done[attacker_index] += float(result["damage"])
+	# Match damage is health actually removed, including nonlethal chip and
+	# excluding overkill. Combo popups still use the hit's full damage.
+	damage_done[attacker_index] += hp_lost
 
 
 func _handle_spawns() -> void:
@@ -402,6 +416,9 @@ func _handle_spawns() -> void:
 
 
 func _update_projectiles() -> void:
+	# After TIME / K.O. the clipboard keeps flying, but it must not damage,
+	# restat, or build meter. Hit resolution stays on the fight phase only.
+	var resolve := phase == Phase.FIGHT
 	for proj in projectiles.duplicate():
 		if not is_instance_valid(proj):
 			projectiles.erase(proj)
@@ -410,22 +427,25 @@ func _update_projectiles() -> void:
 			_retire_projectile(proj)
 			continue
 		proj.tick()
-		var defender: Fighter = p2 if proj.owner_index == 0 else p1
-		if defender.can_be_hit() and proj.hitbox().intersects(defender.hurtbox()):
-			proj.connected = true
-			var blocked := defender.is_guarding(str(proj.info.get("height", "mid")))
-			var info: Dictionary = proj.info.duplicate(true)
-			var scale := 1.0
-			if not blocked:
-				scale = maxf(0.35, 1.0 - 0.09 * float(defender.combo_received))
-			var res := defender.take_hit(info, blocked, proj.facing, scale)
-			var fake_hit := {"rect": proj.hitbox(), "damage": float(info.get("damage", 0.0))}
-			_register_hit(proj.owner_index, p1 if proj.owner_index == 0 else p2,
-					defender, fake_hit, info, res, blocked)
-			proj.dead = true
-			proj.queue_free()
-			projectiles.erase(proj)
-			continue
+		if resolve:
+			var defender: Fighter = p2 if proj.owner_index == 0 else p1
+			if defender.can_be_hit() and proj.hitbox().intersects(defender.hurtbox()):
+				proj.connected = true
+				var blocked := defender.is_guarding(str(proj.info.get("height", "mid")))
+				var info: Dictionary = proj.info.duplicate(true)
+				var scale := 1.0
+				if not blocked:
+					scale = maxf(0.35, 1.0 - 0.09 * float(defender.combo_received))
+				var hp_before := defender.health
+				var res := defender.take_hit(info, blocked, proj.facing, scale)
+				var hp_lost := maxf(0.0, hp_before - defender.health)
+				var fake_hit := {"rect": proj.hitbox(), "damage": float(info.get("damage", 0.0))}
+				_register_hit(proj.owner_index, p1 if proj.owner_index == 0 else p2,
+						defender, fake_hit, info, res, blocked, hp_lost)
+				proj.dead = true
+				proj.queue_free()
+				projectiles.erase(proj)
+				continue
 		if proj.dead:
 			_retire_projectile(proj)
 
@@ -688,8 +708,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func _tick_fighters_presentation() -> void:
+	# KO tumbles and end-of-round motion stay. Whiff meter does not.
+	var meter1 := p1.meter
+	var meter2 := p2.meter
+	p1.tick(InputRouter.blank())
+	p2.tick(InputRouter.blank())
+	p1.meter = meter1
+	p2.meter = meter2
+
+
 func _retire_projectile(proj: Projectile) -> void:
-	if is_instance_valid(proj) and not proj.connected:
+	if phase == Phase.FIGHT and is_instance_valid(proj) and not proj.connected:
 		var owner: Fighter = p1 if proj.owner_index == 0 else p2
 		owner.meter = minf(CharacterDB.METER_MAX, owner.meter + 2.0)
 	projectiles.erase(proj)

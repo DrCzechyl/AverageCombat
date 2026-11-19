@@ -14,9 +14,12 @@ enum State { INTRO, IDLE, WALK, CROUCH, AIR, ATTACK, HITSTUN, BLOCKSTUN, KO, WIN
 
 const TICK := 1.0 / 60.0
 const GRAVITY := 2600.0
-const GROUND_FRICTION := 2400.0
+const GROUND_FRICTION := 2100.0
+const WALK_ACCEL := 2300.0
 const ATTACK_FRICTION := 3000.0
-const AIR_CONTROL := 950.0
+const AIR_CONTROL := 1200.0
+const INPUT_BUFFER := 8
+const BASE_SPRITE_SCALE := 3.0
 
 @onready var sprite: AnimatedSprite2D = $Sprite
 @onready var shadow: Sprite2D = $Shadow
@@ -59,7 +62,13 @@ var jumped_flag := false
 var combo_received := 0
 
 var _anim_name := ""
-var _rng := RandomNumberGenerator.new()
+var _buf_action := ""
+var _buf_ticks := 0
+var _buf_latched := false
+var _pose_scale := Vector2.ONE
+var _land_ticks := 0
+var _kick_x := 0.0
+var _kick_span := 0
 
 
 func setup(id: String, index: int) -> void:
@@ -68,7 +77,6 @@ func setup(id: String, index: int) -> void:
 	player_index = index
 	health = float(data["build"]["health"])
 	meter = 0.0
-	_rng.randomize()
 	_build_frames()
 	reset_visuals()
 	shadow.texture = load("res://assets/sprites/fx/shadow.png")
@@ -136,6 +144,7 @@ func reset_for_round(at: Vector2, face_dir: int) -> void:
 	state = State.INTRO
 	state_tick = 0
 	_anim_name = ""
+	_clear_buffer()
 	sprite.modulate = Color.WHITE
 	sprite.position = Vector2.ZERO
 	sprite.visible = true
@@ -178,6 +187,8 @@ func _move_clear() -> void:
 func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 	landed_flag = false
 	jumped_flag = false
+	_buf_latched = false
+	_track_buffer(inp)
 
 	if hitstop > 0:
 		hitstop -= 1
@@ -204,6 +215,11 @@ func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 			_tick_free(inp)
 
 	_integrate()
+	# Recovery can end on the same tick a buffered press is still valid. Fire it
+	# before the window counts down, and don't spend the window during hitstop.
+	if state == State.IDLE or state == State.WALK or state == State.CROUCH or state == State.AIR:
+		_try_buffered()
+	_decay_buffer()
 	_update_visuals()
 
 
@@ -229,18 +245,15 @@ func _tick_free(inp: Dictionary) -> void:
 	var holding_back := dir != 0 and dir == -facing
 	blocking = (bool(inp.get("block", false)) or holding_back) and not airborne
 
+	if _try_buffered():
+		return
+
 	# Attacks take priority over movement.
 	if _try_attack(inp):
 		return
 
 	if bool(inp.get("jump", false)) and not airborne:
-		vel.y = float(data["build"]["jump_velocity"])
-		airborne = true
-		crouching = false
-		blocking = false
-		state = State.AIR
-		state_tick = 0
-		jumped_flag = true
+		_begin_jump()
 		return
 
 	if airborne:
@@ -252,7 +265,7 @@ func _tick_free(inp: Dictionary) -> void:
 
 	if want_crouch:
 		state = State.CROUCH
-		vel.x = move_toward(vel.x, 0, GROUND_FRICTION * TICK)
+		_approach_ground_x(0, 0.0)
 		walking = false
 		return
 
@@ -264,11 +277,84 @@ func _tick_free(inp: Dictionary) -> void:
 			speed = float(data["build"]["back_speed"])
 		if blocking:
 			speed *= 0.6
-		vel.x = dir * speed
+		_approach_ground_x(dir, speed)
 	else:
 		state = State.IDLE
 		walking = false
-		vel.x = move_toward(vel.x, 0, GROUND_FRICTION * TICK)
+		_approach_ground_x(0, 0.0)
+
+
+func _approach_ground_x(dir: int, target_speed: float) -> void:
+	var target := float(dir) * target_speed
+	var rate := WALK_ACCEL
+	if dir == 0:
+		target = 0.0
+		rate = GROUND_FRICTION
+	elif absf(vel.x) > absf(target) and signf(vel.x) == signf(target):
+		rate = GROUND_FRICTION
+	vel.x = move_toward(vel.x, target, rate * TICK)
+
+
+func _begin_jump() -> void:
+	vel.y = float(data["build"]["jump_velocity"])
+	airborne = true
+	crouching = false
+	blocking = false
+	state = State.AIR
+	state_tick = 0
+	jumped_flag = true
+
+
+func _track_buffer(inp: Dictionary) -> void:
+	if state != State.ATTACK and state != State.HITSTUN and state != State.BLOCKSTUN:
+		return
+	var action := ""
+	if bool(inp.get("special", false)):
+		action = "special"
+	elif bool(inp.get("heavy", false)):
+		action = "heavy"
+	elif bool(inp.get("light", false)):
+		action = "light"
+	elif bool(inp.get("jump", false)):
+		action = "jump"
+	if action != "":
+		_buf_action = action
+		_buf_ticks = INPUT_BUFFER
+		_buf_latched = true
+
+
+func _decay_buffer() -> void:
+	if _buf_latched or hitstop > 0:
+		return
+	if state != State.ATTACK and state != State.HITSTUN and state != State.BLOCKSTUN:
+		return
+	if _buf_ticks <= 0:
+		return
+	_buf_ticks -= 1
+	if _buf_ticks <= 0:
+		_buf_action = ""
+
+
+func _clear_buffer() -> void:
+	_buf_action = ""
+	_buf_ticks = 0
+
+
+func _try_buffered() -> bool:
+	if _buf_ticks <= 0 or _buf_action == "":
+		return false
+	var action := _buf_action
+	_clear_buffer()
+	if action == "jump":
+		if airborne:
+			return false
+		_begin_jump()
+		return true
+	return _try_attack({
+		"special": action == "special",
+		"heavy": action == "heavy",
+		"light": action == "light",
+	})
 
 
 func _try_attack(inp: Dictionary) -> bool:
@@ -292,6 +378,7 @@ func _try_attack(inp: Dictionary) -> bool:
 func start_move(id: String) -> void:
 	if not data.get("moves", {}).has(id):
 		return
+	_clear_buffer()
 	move_name = id
 	move = data["moves"][id]
 	move_tick = 0
@@ -532,7 +619,14 @@ func _apply_hit_damage(info: Dictionary, dir: int, damage: float, result: Dictio
 
 
 func apply_hitstop(ticks: int) -> void:
+	var starting := hitstop <= 0
 	hitstop = maxi(hitstop, ticks)
+	if starting:
+		_kick_span = hitstop
+		var dir := -signf(vel.x)
+		if dir == 0.0:
+			dir = -float(facing)
+		_kick_x = dir * 3.0
 
 
 func _threatened() -> bool:
@@ -550,8 +644,14 @@ func _threatened() -> bool:
 
 
 func reset_visuals() -> void:
+	_pose_scale = Vector2.ONE
+	_land_ticks = 0
+	_kick_x = 0.0
+	_kick_span = 0
 	sprite.flip_h = facing < 0
 	sprite.position = Vector2.ZERO
+	sprite.scale = Vector2(BASE_SPRITE_SCALE, BASE_SPRITE_SCALE)
+	sprite.speed_scale = 1.0
 	shadow.position = Vector2(0, CharacterDB.GROUND_Y - pos.y)
 	shadow.modulate = Color(1, 1, 1, 0.55)
 	shadow.scale = Vector2(2.2, 1.0)
@@ -570,16 +670,52 @@ func _update_visuals(frozen := false) -> void:
 	else:
 		sprite.modulate = Color.WHITE
 
-	if hitstop > 0 and not frozen:
-		sprite.position = Vector2.ZERO
-	elif hitstop > 0:
-		sprite.position = Vector2(_rng.randf_range(-3.0, 3.0), 0)
-	else:
-		sprite.position = Vector2.ZERO
+	var ox := 0.0
+	var oy := 0.0
+	if hitstop > 0 and _kick_span > 1:
+		var t := clampf(float(hitstop) / float(_kick_span - 1), 0.0, 1.0)
+		ox = _kick_x * t
+	elif (state == State.IDLE or state == State.INTRO) and not blocking and absf(vel.x) < 12.0:
+		oy = 1.0 if sin(float(state_tick) * TAU / 64.0) > 0.2 else 0.0
+	sprite.position = Vector2(roundf(ox), roundf(oy))
+	_update_pose_scale(frozen)
 
 	_update_anim()
 	if debug_boxes:
 		queue_redraw()
+
+
+func _update_pose_scale(frozen: bool) -> void:
+	if landed_flag:
+		_land_ticks = 8
+	var target := Vector2.ONE
+	if state == State.ATTACK and not move.is_empty():
+		var startup := int(move.get("startup", 1))
+		var active := int(move.get("active", 1))
+		if move_tick < startup:
+			target = Vector2(1.08, 0.90)
+		elif move_tick < startup + active:
+			target = Vector2(1.12, 0.94)
+	elif airborne:
+		var stretch := clampf(absf(vel.y) / 1000.0, 0.0, 1.0) * 0.12
+		if stretch < 0.02:
+			stretch = 0.0
+		var yf := 1.0 + stretch
+		target = Vector2(1.0 / yf, yf)
+	if not frozen:
+		_pose_scale = _pose_scale.move_toward(target, 0.045)
+	var shown := _pose_scale
+	var landing := _land_ticks > 0
+	if landing:
+		var k := float(_land_ticks) / 8.0
+		shown = Vector2(lerpf(shown.x, 1.12, k), lerpf(shown.y, 1.0 / 1.12, k))
+		if not frozen:
+			_land_ticks -= 1
+	if not landing and shown.distance_to(Vector2.ONE) <= 0.02 \
+			and target.distance_to(Vector2.ONE) <= 0.001:
+		shown = Vector2.ONE
+		_pose_scale = Vector2.ONE
+	sprite.scale = Vector2(BASE_SPRITE_SCALE, BASE_SPRITE_SCALE) * shown
 
 
 func _draw() -> void:
@@ -627,9 +763,9 @@ func _update_anim() -> void:
 		if anim == "jump":
 			frame = 0 if vel.y < 0.0 else 1
 		elif not move.is_empty():
-			var total := CharacterDB.move_total(move)
 			var count := int(CharacterDB.ANIMS[anim]["frames"])
-			frame = CharacterDB.move_frame_index(move_tick, total, count)
+			frame = _move_pose_frame(move_tick, int(move.get("startup", 1)),
+					int(move.get("active", 1)), count)
 		if _anim_name != anim or sprite.animation != anim:
 			sprite.play(anim)
 		sprite.set_frame_and_progress(frame, 0.0)
@@ -638,6 +774,26 @@ func _update_anim() -> void:
 		var restart := _anim_name != anim
 		_play_anim(anim, restart)
 		_anim_name = anim
+	if anim == "walk" and data.has("build"):
+		var pace := maxf(float(data["build"]["walk_speed"]), 1.0)
+		sprite.speed_scale = clampf(absf(vel.x) / pace, 0.35, 1.0)
+	else:
+		sprite.speed_scale = 1.0
+
+
+func _move_pose_frame(tick: int, startup: int, active: int, count: int) -> int:
+	if count <= 1:
+		return 0
+	var strike := count - 2
+	if tick < startup:
+		if strike <= 0:
+			return 0
+		var span := maxi(startup - 1, 1)
+		var idx := int(float(maxi(tick - 1, 0)) * float(strike) / float(span))
+		return clampi(idx, 0, strike - 1)
+	if tick < startup + active:
+		return strike
+	return count - 1
 
 
 func _play_anim(anim: String, restart := false) -> void:

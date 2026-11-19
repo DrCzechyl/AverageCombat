@@ -69,6 +69,19 @@ var _accum := 0.0
 var _fx_cache: Dictionary = {}
 var _start_positions := [Vector2.ZERO, Vector2.ZERO]
 
+var _vis_prev_p1 := Vector2.ZERO
+var _vis_prev_p2 := Vector2.ZERO
+var _vis_curr_p1 := Vector2.ZERO
+var _vis_curr_p2 := Vector2.ZERO
+var _proj_prev: Dictionary = {}
+var _proj_curr: Dictionary = {}
+var _proj_sim: Dictionary = {}
+var _visuals_displaced := false
+var _since_physics := 0.0
+var _physics_presented := false
+var _kick_dir := Vector2(0, 1)
+var _kick_time := 0.0
+
 
 func _ready() -> void:
 	cfg = _build_config()
@@ -146,6 +159,7 @@ func _start_round() -> void:
 	ko_winner = -1
 	slowmo = 0
 	_clear_projectiles()
+	_sync_visual_endpoints()
 	_announce("ROUND %d" % round_number, 130)
 	Sfx.play("round_start", -8.0, 1.0, 0.0)
 	hud.snap_health()
@@ -175,9 +189,24 @@ func _physics_process(delta: float) -> void:
 		if phase == Phase.FIGHT and previous_phase != Phase.FIGHT:
 			router.poll()
 		queue_redraw()
+	_since_physics = 0.0
+	_physics_presented = true
+	_present(clampf(_accum / TICK, 0.0, 1.0))
+
+
+func _process(delta: float) -> void:
+	if finished or p1 == null or p2 == null:
+		return
+	if _physics_presented:
+		_physics_presented = false
+		_present(clampf(_accum / TICK, 0.0, 1.0))
+		return
+	_since_physics += delta
+	_present(clampf((_accum + _since_physics) / TICK, 0.0, 1.0))
 
 
 func _step() -> void:
+	_capture_visual_previous()
 	total_ticks += 1
 	if announce_ticks > 0:
 		announce_ticks -= 1
@@ -198,6 +227,8 @@ func _step() -> void:
 			_step_match_end()
 
 	_separate_bodies()
+	_capture_visual_current()
+	_apply_camera(0.0)
 
 
 func _separate_bodies() -> void:
@@ -323,12 +354,23 @@ func _step_match_end() -> void:
 
 
 func _update_camera() -> void:
-	if shake > 0.0 and bool(SaveData.settings.get("screen_shake", true)):
-		camera.offset = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * shake
+	if shake > 0.0:
+		_kick_time += TICK
 	else:
-		camera.offset = Vector2.ZERO
+		_kick_time = 0.0
+	_apply_camera(0.0)
 	var target_zoom := 1.055 if phase == Phase.KO else 1.0
-	camera.zoom = camera.zoom.lerp(Vector2(target_zoom, target_zoom), 0.08)
+	camera.zoom = camera.zoom.lerp(Vector2(target_zoom, target_zoom), 0.06)
+
+
+func _apply_camera(extra: float) -> void:
+	var offset := Vector2.ZERO
+	if shake > 0.0 and bool(SaveData.settings.get("screen_shake", true)):
+		var t := maxf(0.0, _kick_time + extra)
+		var omega := 9.0
+		var response := exp(-omega * t) * (1.0 + omega * t)
+		offset = _kick_dir * shake * response
+	camera.offset = _quantize_px(offset)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +426,7 @@ func _register_hit(attacker_index: int, defender: Fighter, contact: Vector2,
 	var attacker := _fighter(attacker_index)
 	var blocked: bool = result["blocked"]
 	var heavy := float(result["damage"]) >= 80.0
+	_note_kick(attacker, defender)
 	# Landing (or getting blocked) builds the attacker's meter.
 	var gain := float(info.get("meter_gain", 8.0))
 	attacker.meter = minf(CharacterDB.METER_MAX, attacker.meter + gain * (0.4 if blocked else 1.0))
@@ -408,6 +451,14 @@ func _register_hit(attacker_index: int, defender: Fighter, contact: Vector2,
 	# Match damage is health actually removed, including nonlethal chip and
 	# excluding overkill. Combo popups still use the hit's full damage.
 	damage_done[attacker_index] += hp_lost
+
+
+func _note_kick(attacker: Fighter, defender: Fighter) -> void:
+	var aim := defender.pos - attacker.pos
+	if aim.length_squared() < 1.0:
+		aim = Vector2(attacker.facing, 0.0)
+	_kick_dir = aim.normalized()
+	_kick_time = 0.0
 
 
 func _handle_spawns() -> void:
@@ -435,6 +486,9 @@ func _update_projectiles() -> void:
 		if proj.dead:
 			_retire_projectile(proj)
 			continue
+		var proj_id: int = proj.get_instance_id()
+		if not _proj_prev.has(proj_id):
+			_proj_prev[proj_id] = proj.position
 		proj.tick()
 		if resolve:
 			var defender: Fighter = p2 if proj.owner_index == 0 else p1
@@ -462,6 +516,9 @@ func _handle_landings() -> void:
 	for f in [p1, p2]:
 		if f.landed_flag:
 			_spawn_fx("dust", Vector2(f.pos.x, CharacterDB.GROUND_Y), 2.0)
+			if shake < 1.2:
+				_kick_dir = Vector2(0, 1)
+				_kick_time = 0.0
 			shake = maxf(shake, 1.2)
 
 
@@ -519,6 +576,7 @@ func _begin_round_end(winner: int, label: String) -> void:
 	phase_ticks = KO_TICKS if label == "K.O." else 120
 	slowmo = 45 if label == "K.O." else 0
 	shake = 8.0
+	_kick_time = 0.0
 	var sub := ""
 	if winner == 0:
 		sub = "%s WINS THE ROUND" % _name_of(p1)
@@ -573,6 +631,7 @@ func _training_reset() -> void:
 	_enter_fight()
 	clear_projectiles_now()
 	_announce("RESET", 40)
+	_sync_visual_endpoints()
 	hud.snap_health()
 	router.discard()
 
@@ -630,11 +689,14 @@ func _spawn_fx(kind: String, at: Vector2, scale := 1.0) -> void:
 			anim.queue_free()
 			return
 	anim.position = at
-	anim.scale = Vector2(scale, scale)
+	var target_scale := Vector2(scale, scale)
+	anim.scale = target_scale * 0.8
 	anim.z_index = 6
 	fx_root.add_child(anim)
 	anim.play("fx")
 	anim.animation_finished.connect(anim.queue_free)
+	var pop := anim.create_tween()
+	pop.tween_property(anim, "scale", target_scale, 0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _fx_frames(path: String, fw: int, fh: int, count: int, fps: float) -> SpriteFrames:
@@ -677,6 +739,9 @@ func clear_projectiles_now() -> void:
 		if is_instance_valid(proj):
 			proj.queue_free()
 	projectiles.clear()
+	_proj_prev.clear()
+	_proj_curr.clear()
+	_proj_sim.clear()
 
 
 func _clear_projectiles() -> void:
@@ -717,7 +782,90 @@ func _retire_projectile(proj: Projectile) -> void:
 	if phase == Phase.FIGHT and is_instance_valid(proj) and not proj.connected:
 		var owner: Fighter = p1 if proj.owner_index == 0 else p2
 		owner.meter = minf(CharacterDB.METER_MAX, owner.meter + 2.0)
+	if is_instance_valid(proj):
+		var proj_id: int = proj.get_instance_id()
+		_proj_prev.erase(proj_id)
+		_proj_curr.erase(proj_id)
+		_proj_sim.erase(proj_id)
 	projectiles.erase(proj)
 	if is_instance_valid(proj):
 		proj.dead = true
 		proj.queue_free()
+
+
+func _sync_visual_endpoints() -> void:
+	if p1 == null or p2 == null:
+		return
+	_vis_prev_p1 = p1.pos
+	_vis_prev_p2 = p2.pos
+	_vis_curr_p1 = p1.pos
+	_vis_curr_p2 = p2.pos
+	_proj_prev.clear()
+	_proj_curr.clear()
+	_proj_sim.clear()
+	for proj in projectiles:
+		if not is_instance_valid(proj):
+			continue
+		var proj_id: int = proj.get_instance_id()
+		_proj_prev[proj_id] = proj.position
+		_proj_curr[proj_id] = proj.position
+		_proj_sim[proj_id] = proj.position
+	_visuals_displaced = false
+
+
+func _capture_visual_previous() -> void:
+	if _visuals_displaced:
+		_restore_projectile_sim()
+		_visuals_displaced = false
+	_vis_prev_p1 = p1.pos
+	_vis_prev_p2 = p2.pos
+	_proj_prev.clear()
+	for proj in projectiles:
+		if is_instance_valid(proj):
+			_proj_prev[proj.get_instance_id()] = proj.position
+
+
+func _capture_visual_current() -> void:
+	_vis_curr_p1 = p1.pos
+	_vis_curr_p2 = p2.pos
+	_proj_curr.clear()
+	_proj_sim.clear()
+	for proj in projectiles:
+		if not is_instance_valid(proj):
+			continue
+		var proj_id: int = proj.get_instance_id()
+		var at: Vector2 = proj.position
+		_proj_curr[proj_id] = at
+		_proj_sim[proj_id] = at
+		if not _proj_prev.has(proj_id):
+			_proj_prev[proj_id] = at
+
+
+func _restore_projectile_sim() -> void:
+	for proj in projectiles:
+		if not is_instance_valid(proj):
+			continue
+		var proj_id: int = proj.get_instance_id()
+		if _proj_sim.has(proj_id):
+			proj.position = _proj_sim[proj_id]
+
+
+func _present(alpha: float) -> void:
+	if p1 == null or p2 == null:
+		return
+	var blend := clampf(alpha, 0.0, 1.0)
+	p1.position = _quantize_px(_vis_prev_p1.lerp(_vis_curr_p1, blend))
+	p2.position = _quantize_px(_vis_prev_p2.lerp(_vis_curr_p2, blend))
+	for proj in projectiles:
+		if not is_instance_valid(proj):
+			continue
+		var proj_id: int = proj.get_instance_id()
+		var curr: Vector2 = _proj_curr.get(proj_id, proj.position)
+		var prev: Vector2 = _proj_prev.get(proj_id, curr)
+		proj.position = _quantize_px(prev.lerp(curr, blend))
+	_visuals_displaced = true
+	_apply_camera(_since_physics)
+
+
+func _quantize_px(v: Vector2) -> Vector2:
+	return Vector2(round(v.x * 3.0) / 3.0, round(v.y * 3.0) / 3.0)

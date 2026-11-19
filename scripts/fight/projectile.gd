@@ -41,7 +41,8 @@ func setup(owner: Fighter, data: Dictionary) -> void:
 
 func tick() -> void:
 	position.x += facing * speed * TICK
-	_spin += facing * 9.0 * TICK
+	_spin += facing * 2.0 * TICK
+	queue_redraw()
 	life -= TICK
 	if life <= 0.0 or position.x < 60.0 or position.x > 1220.0:
 		dead = true

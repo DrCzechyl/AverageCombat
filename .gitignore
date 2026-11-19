@@ -1,7 +1,6 @@
 # Godot
 .godot/
 *.translation
-# Local sandbox (custom user://). Never commit.
 override.cfg
 
 # Python tooling
@@ -11,6 +10,3 @@ __pycache__/
 
 # OS noise
 .DS_Store
-
-# Local Godot user-dir isolation. Never commit; tests write SaveData here.
-override.cfg

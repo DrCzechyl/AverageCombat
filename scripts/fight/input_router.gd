@@ -1,8 +1,8 @@
 class_name InputRouter
 extends RefCounted
 
-## Turns raw input into per-tick input frames. Button presses are latched so a
-## press can never be lost between simulation ticks; directions are held.
+## Turns raw input into per-tick frames. Latches presses between playable ticks
+## and samples held directions when a fighter consumes the frame.
 ##
 ## This is the seam where online play will eventually plug in: replace
 ## get_frame() with frames received from the netcode and nothing else changes.

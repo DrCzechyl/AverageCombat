@@ -35,7 +35,8 @@ gamepads work too.
 | Pause | `Esc` | `Esc` |
 
 Gamepads: pad 1 drives P1, pad 2 drives P2. D-pad or left stick to move,
-`A/B/X/Y` for light/heavy/special/block, `Start` to pause.
+`A/B/X/Y` for light/heavy/special/block, `Start` to pause during a match.
+Use the D-pad to navigate menus and `A` to confirm.
 
 **Blocking rules** are Mortal Kombat-ish: hold back or the block key. Standing
 block stops high and mid attacks, crouch block stops low and mid. Sweeps knock

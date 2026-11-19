@@ -1,9 +1,9 @@
 extends Node
 
 ## Regressions for menu confirm, intro input, and Karen's clipboard.
-## Drives real joypad events (Input.parse_input_event), not Button.pressed.emit.
-##
-##   godot --headless --fixed-fps 60 --path . res://tests/review_fixes.tscn
+##   godot --headless --path . res://tests/review_fixes.tscn
+
+const Harness := preload("res://tests/harness.gd")
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -20,6 +20,10 @@ func _ready() -> void:
 		return
 
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_ok(SaveData.is_isolated(), "controller suite could not isolate the save")
+	if not _failures.is_empty():
+		_report()
+		return
 	await _frames(1)
 	await _run()
 	_report()
@@ -86,12 +90,16 @@ func _check_menus() -> void:
 	await _tap_joy(0, JOY_BUTTON_A)
 	await _frames(3)
 	_ok(_scene_is(Game.CHAR_SELECT), "pad A did not confirm the title button")
+	if not _scene_is(Game.CHAR_SELECT):
+		return
 
 	var select := get_tree().current_scene
 	_ok(select != null and str(select.mode) == "versus", "versus select did not open")
 	await _tap_joy(0, JOY_BUTTON_A)
 	await _frames(2)
 	_ok(_scene_is(Game.CHAR_SELECT), "one pad A skipped character select")
+	if not is_instance_valid(select):
+		return
 	_ok(bool(select.locked[0]) and not bool(select.locked[1]),
 			"P1 pad A should lock only P1 (locked=%s)" % str(select.locked))
 	await _tap_joy(1, JOY_BUTTON_A)
@@ -120,6 +128,7 @@ func _check_menus() -> void:
 	arena.p1.move = {}
 	arena.p2.state = Fighter.State.IDLE
 	await _tick([_joy_event(0, JOY_BUTTON_A, true)])
+	await _tick()
 	_ok(arena.p1.state == Fighter.State.ATTACK and arena.p1.move_name == "jab",
 			"pad A during a match did not throw P1 light (state %s %s)" % [arena.p1.state, arena.p1.move_name])
 	_ok(not arena.pause_menu.visible and not get_tree().paused, "combat A opened the pause menu")
@@ -230,16 +239,14 @@ func _check_reset_edges() -> void:
 			"KO tap fired after training reset (%s)" % arena.p1.move_name)
 	_ok(not arena.p1.airborne, "KO jump fired after training reset")
 
-	# Once the fighter intro pose ends, a new press is live again.
-	guard = 0
-	while arena.p1.state != Fighter.State.IDLE and guard < 12:
-		await _tick()
-		guard += 1
-	_ok(arena.p1.state == Fighter.State.IDLE, "fighter never returned to idle after reset")
+	arena.phase = Arena.Phase.KO
+	arena.phase_ticks = 1
+	arena.slowmo = 0
 	await _tick([_joy_event(0, JOY_BUTTON_A, true)])
-	_ok(arena.p1.state == Fighter.State.ATTACK and arena.p1.move_name == "jab",
-			"post-reset fight tick ignored a real light press")
+	_ok(arena.phase == Arena.Phase.FIGHT, "boundary press did not leave the training KO")
 	await _tick([_joy_event(0, JOY_BUTTON_A, false)])
+	_ok(arena.p1.state == Fighter.State.ATTACK and arena.p1.move_name == "jab",
+			"the first playable training tick ignored a fresh light press")
 	arena.queue_free()
 	await _frames(2)
 
@@ -342,7 +349,7 @@ func _spawn_arena(p1_id: String, p2_id: String, mode: String) -> Arena:
 	Game.match_config = {
 		"mode": mode, "p1": p1_id, "p2": p2_id, "stage": "breakroom",
 		"p2_is_ai": false, "difficulty": 2,
-		"round_wins_needed": 1 if mode == "training" else 2,
+		"round_wins_needed": Game.rounds_to_win(mode),
 	}
 	var arena: Arena = load(Game.ARENA).instantiate()
 	arena.auto_report = false
@@ -382,8 +389,10 @@ func _tap_joy(device: int, button: JoyButton) -> void:
 
 
 func _tick(events: Array = []) -> void:
+	await get_tree().physics_frame
 	for ev in events:
 		Input.parse_input_event(ev)
+	Input.flush_buffered_events()
 	await get_tree().process_frame
 
 
@@ -453,11 +462,12 @@ func _ok(condition: bool, message: String) -> void:
 
 
 func _report() -> void:
+	var code := 0
 	if _failures.is_empty():
 		print("REVIEW PASS: %d checks" % _checks)
-		get_tree().quit(0)
 	else:
+		code = 1
 		printerr("REVIEW FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-		get_tree().quit(1)
+	Harness.quiet_quit(self, code)

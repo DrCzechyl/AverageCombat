@@ -149,7 +149,6 @@ func _start_round() -> void:
 	_announce("ROUND %d" % round_number, 130)
 	Sfx.play("round_start", -8.0, 1.0, 0.0)
 	hud.snap_health()
-	# Round restart is not playable yet. Drop anything latched on the way in.
 	router.discard()
 
 
@@ -161,32 +160,21 @@ func _start_round() -> void:
 func _physics_process(delta: float) -> void:
 	if finished:
 		return
-	# Edges only stick during FIGHT. Polling through the intro latches a tap
-	# that get_frame will not see until the round actually starts.
-	_sample_router()
+	if phase == Phase.FIGHT:
+		router.poll()
+	else:
+		router.discard()
 	_accum += delta
 	var guard := 0
 	while _accum >= TICK and guard < 8:
 		_accum -= TICK
 		guard += 1
-		var was_playable := _edges_live()
+		var previous_phase := phase
 		_step()
-		# The tick that becomes playable still gets this frame's real edges,
-		# including a press that landed on the transition itself.
-		if _edges_live() and not was_playable:
+		# Preserve fresh presses on the frame that opens play.
+		if phase == Phase.FIGHT and previous_phase != Phase.FIGHT:
 			router.poll()
 		queue_redraw()
-
-
-func _sample_router() -> void:
-	if _edges_live():
-		router.poll()
-	else:
-		router.discard()
-
-
-func _edges_live() -> bool:
-	return phase == Phase.FIGHT
 
 
 func _step() -> void:
@@ -265,11 +253,15 @@ func _step_intro() -> void:
 		_announce("FIGHT!", 60)
 		Sfx.play("bell", -7.0, 1.0, 0.0)
 	if phase_ticks <= 0:
-		phase = Phase.FIGHT
-		p1.state = Fighter.State.IDLE
-		p1.state_tick = 0
-		p2.state = Fighter.State.IDLE
-		p2.state_tick = 0
+		_enter_fight()
+
+
+func _enter_fight() -> void:
+	phase = Phase.FIGHT
+	phase_ticks = 0
+	for fighter in [p1, p2]:
+		fighter.state = Fighter.State.IDLE
+		fighter.state_tick = 0
 
 
 func _step_fight() -> void:
@@ -578,13 +570,10 @@ func _training_reset() -> void:
 	p2.health = float(p2.data["build"]["health"])
 	p1.meter = minf(CharacterDB.METER_MAX, p1.meter)
 	p2.meter = minf(CharacterDB.METER_MAX, p2.meter)
-	phase = Phase.FIGHT
-	phase_ticks = 0
+	_enter_fight()
 	clear_projectiles_now()
 	_announce("RESET", 40)
 	hud.snap_health()
-	# Training snaps straight back to FIGHT. Clear edges from the KO first;
-	# a press on this same frame is polled after the step returns.
 	router.discard()
 
 

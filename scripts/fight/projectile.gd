@@ -33,16 +33,8 @@ func setup(owner: Fighter, data: Dictionary) -> void:
 		info["height"] = move.get("height", "mid")
 	speed = float(info.get("speed", 800.0))
 	life = float(info.get("life", 0.9))
-	var board := _local_board()
-	# Standing mids bottom out at the heavy hitbox (-150). That is eight pixels
-	# into CROUCH_HURTBOX (top -158). The same reach makes a grounded clipboard
-	# a mid: it clips a crouch and still crosses a standing torso. Spawn Y is
-	# derived from the board rect so the drawn clipboard and the hitbox move
-	# together.
-	var heavy: Rect2 = CharacterDB.BASE_MOVES["heavy"]["hitbox"]
-	var mid_bottom := heavy.position.y + heavy.size.y
-	var spawn_y := mid_bottom - (board.position.y + board.size.y)
-	position = owner.pos + Vector2(facing * 66.0, spawn_y)
+	var offset: Vector2 = info.get("spawn_offset", Vector2(66, -196))
+	position = owner.pos + Vector2(facing * offset.x, offset.y)
 	z_index = 3
 	connected = false
 
@@ -67,7 +59,7 @@ func hitbox() -> Rect2:
 func _draw() -> void:
 	var body := _local_board()
 	draw_set_transform(Vector2.ZERO, _spin, Vector2.ONE)
-	# Clipboard art uses the collision rect so the sprite cannot drift off the hit.
+	# Use the collision rectangle as the base for the clipboard artwork.
 	draw_rect(body, Color("ded6c0"))
 	draw_rect(body, Color("2b2630"), false, 2.0)
 	var clip := Rect2(body.get_center().x - 6.0, body.position.y - 3.0, 12.0, 5.0)

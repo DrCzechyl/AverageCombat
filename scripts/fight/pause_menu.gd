@@ -87,13 +87,11 @@ func open() -> void:
 func close() -> void:
 	if not visible:
 		return
-	visible = false
-	get_tree().paused = false
-	# Pad A is both ui_accept and P1 light. Drop focus so a hidden pause
-	# button does not eat the next attack.
 	var focused := get_viewport().gui_get_focus_owner()
 	if focused != null and is_ancestor_of(focused):
 		focused.release_focus()
+	visible = false
+	get_tree().paused = false
 
 
 func _restart() -> void:

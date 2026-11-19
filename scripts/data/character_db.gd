@@ -105,6 +105,8 @@ const SPECIALS := {
 		"projectile": {
 			"speed": 820.0, "life": 0.9, "damage": 95.0,
 			"hitstun": 20, "blockstun": 12, "knockback": 260.0,
+			# At ground level the clipboard overlaps both standing and crouching.
+			"spawn_offset": Vector2(66, -158),
 			"rect": Rect2(-13, -26, 26, 34),
 		},
 	},

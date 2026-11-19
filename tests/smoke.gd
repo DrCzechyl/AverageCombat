@@ -38,6 +38,7 @@ func _run() -> void:
 	await _check_ai_match()
 	await _check_menus()
 	_check_save_roundtrip()
+	_check_malformed_save()
 
 
 func _ok(condition: bool, message: String) -> void:
@@ -324,6 +325,36 @@ func _check_save_roundtrip() -> void:
 	_ok(Harness.normal_save_stamp() == _save_stamp, "roundtrip touched the normal save")
 	SaveData.settings["volume"] = 0.8
 	SaveData.save_game()
+
+
+func _check_malformed_save() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("settings", "volume", [])
+	cfg.set_value("settings", "difficulty", 99)
+	cfg.set_value("settings", "fullscreen", 1)
+	cfg.set_value("settings", "screen_shake", false)
+	cfg.set_value("stats", "matches", {"broken": true})
+	cfg.set_value("stats", "best_combo", -1)
+	cfg.set_value("stats", "arcade_clears", 2)
+	cfg.set_value("stats", "damage_dealt", 12.5)
+	cfg.set_value("last", "p1", "unknown")
+	cfg.set_value("last", "p2", "tony")
+	cfg.set_value("last", "stage", [])
+	_ok(cfg.save(SaveData.save_path) == OK, "could not write malformed save fixture")
+	SaveData.settings["volume"] = 0.55
+	SaveData.load_game()
+	_ok(SaveData.settings["volume"] == SaveData.DEFAULT_SETTINGS["volume"],
+			"malformed volume did not fall back to its default")
+	_ok(SaveData.settings["difficulty"] == 3, "out-of-range difficulty was not clamped")
+	_ok(SaveData.settings["fullscreen"] == false and SaveData.settings["screen_shake"] == false,
+			"invalid boolean did not fall back or a valid boolean was discarded")
+	_ok(SaveData.stats["matches"] == 0 and SaveData.stats["best_combo"] == 0,
+			"invalid integer stats did not fall back to their defaults")
+	_ok(SaveData.stats["arcade_clears"] == 2 and SaveData.stats["damage_dealt"] == 12.5,
+			"valid stats were discarded along with invalid ones")
+	_ok(SaveData.last_picks == {"p1": "dave", "p2": "tony", "stage": "breakroom"},
+			"save did not preserve valid picks and replace invalid ones")
+	_ok(Harness.normal_save_stamp() == _save_stamp, "malformed save test touched the normal save")
 
 
 func _report() -> void:

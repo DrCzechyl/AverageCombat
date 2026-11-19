@@ -4,6 +4,18 @@ extends RefCounted
 ## A deliberately simple, readable opponent. It decides on a fixed beat so it
 ## can't react frame-perfectly, and it commits to actions instead of reading
 ## your inputs.
+##
+## Ground normals are chosen only when the posed hitbox overlaps the opponent's
+## hurtbox. A flat stop at 175px sits past standing reach (jab about 148px,
+## heavy about 162px), so the CPU used to whiff until a special landed.
+
+const GROUND_NORMALS := ["sweep", "low", "jab", "heavy"]
+const NORMAL_WEIGHTS := {
+	"sweep": 24,
+	"low": 26,
+	"jab": 28,
+	"heavy": 22,
+}
 
 var level := 2
 var behavior := "fight"  # "fight" | "dummy"
@@ -87,17 +99,18 @@ func _think(me: Fighter, foe: Fighter, dist: float, toward: int) -> void:
 		return
 
 	if me.airborne:
-		if dist < 190.0 and _rng.randf() < 0.35:
+		if move_reaches(me, foe, "air") and _rng.randf() < 0.35:
 			_pending["light"] = true
 		return
 
-	if dist > 175.0:
+	var reachable := _reachable_normals(me, foe)
+	if reachable.is_empty():
 		_dir = toward
 		if dist > 300.0 and dist < 520.0 and _rng.randf() < 0.12:
 			_pending["jump"] = true
 		return
 
-	# In range: shimmy, then commit.
+	# In range: shimmy, then commit to a normal that actually overlaps.
 	if dist < 92.0 and _rng.randf() < 0.3:
 		_dir = -toward
 	else:
@@ -111,16 +124,53 @@ func _think(me: Fighter, foe: Fighter, dist: float, toward: int) -> void:
 		_attack_cd = [46, 38, 30][level - 1] + _rng.randi_range(0, 12)
 		return
 
-	var roll := _rng.randf()
-	if roll < 0.24 and dist < 130.0:
-		_crouch = true
-		_pending["heavy"] = true  # sweep
-	elif roll < 0.5 and dist < 150.0:
-		_crouch = true
-		_pending["light"] = true  # low poke
-	elif roll < 0.78:
-		_pending["light"] = true  # jab
-	else:
-		_pending["heavy"] = true  # heavy
+	_commit_normal(_choose_normal(reachable))
 
+
+## True when the move's posed hitbox would overlap the opponent this frame.
+## Ground attacks face the opponent the way start_move does. Lunge is ignored
+## so a normal is never started from a spacing that would whiff.
+func move_reaches(me: Fighter, foe: Fighter, move_name: String) -> bool:
+	if me == null or foe == null:
+		return false
+	var moves: Dictionary = me.data.get("moves", {})
+	if not moves.has(move_name):
+		return false
+	var move: Dictionary = moves[move_name]
+	if not move.has("hitbox"):
+		return false
+	var facing := me.facing
+	if not me.airborne:
+		facing = 1 if foe.pos.x >= me.pos.x else -1
+	return me.move_hitbox(move, facing).intersects(foe.hurtbox())
+
+
+func _reachable_normals(me: Fighter, foe: Fighter) -> Array:
+	var found: Array = []
+	for move_name in GROUND_NORMALS:
+		if move_reaches(me, foe, move_name):
+			found.append(move_name)
+	return found
+
+
+func _choose_normal(names: Array) -> String:
+	var total := 0
+	for move_name in names:
+		total += int(NORMAL_WEIGHTS[move_name])
+	var roll := _rng.randi_range(1, total)
+	var cursor := 0
+	for move_name in names:
+		cursor += int(NORMAL_WEIGHTS[move_name])
+		if roll <= cursor:
+			return str(move_name)
+	return str(names[0])
+
+
+func _commit_normal(move_name: String) -> void:
+	if move_name == "sweep" or move_name == "low":
+		_crouch = true
+	if move_name == "heavy" or move_name == "sweep":
+		_pending["heavy"] = true
+	else:
+		_pending["light"] = true
 	_attack_cd = [40, 30, 20][level - 1] + _rng.randi_range(0, 14)

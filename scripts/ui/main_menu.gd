@@ -61,4 +61,4 @@ func _on_menu(action: String) -> void:
 		"options":
 			Game.goto("res://scenes/ui/options.tscn")
 		"quit":
-			get_tree().quit()
+			Game.quit()

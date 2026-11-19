@@ -8,7 +8,7 @@ extends Node
 ## P2: arrows, numpad 1/2/3 light/heavy/special, numpad 0 block
 ##     (laptop alt: , . / and ')
 ## Pads: device 0 is P1, device 1 is P2. A/B/X/Y are light/heavy/special/block.
-## Start pauses. Pad A also confirms native Button menus (ui_accept).
+## Start pauses. Pad A confirms menus (ui_accept) and pad B backs out (ui_cancel).
 ## Blocking also works by holding away from the opponent, Mortal Kombat style.
 
 const KEYMAP := {
@@ -97,11 +97,13 @@ func setup() -> void:
 		start.button_index = JOY_BUTTON_START
 		InputMap.action_add_event("pause", start)
 
-	# Godot 4.7 ships ui_accept with Enter / Space only. D-pad and stick already
-	# move focus, but a pad-only player can never activate a Button. Pad A on
-	# every device confirms menus. Combat keeps A as light on device 0 and 1,
-	# and Start stays pause plus p1/p2 confirm.
+	# Godot 4.7 ships ui_accept with Enter / Space / numpad Enter, and ui_cancel
+	# with Escape only. D-pad and stick already move focus, but a pad-only
+	# player could confirm a Button and never leave a picker. Pad A confirms
+	# and pad B cancels on every device. Combat keeps A as light and B as heavy
+	# on device 0 and 1, and Start stays pause plus p1/p2 confirm.
 	_ensure_joy_button("ui_accept", JOY_BUTTON_A, -1)
+	_ensure_joy_button("ui_cancel", JOY_BUTTON_B, -1)
 
 
 func _ensure_joy_button(action: String, button: JoyButton, device: int) -> void:

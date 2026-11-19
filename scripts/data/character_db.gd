@@ -102,6 +102,9 @@ const SPECIALS := {
 		"meter_gain": 0.0, "meter_cost": 50.0,
 		"sfx": "projectile", "hit_sfx": "hit_light",
 		"lunge": 0.0, "armor": false, "chip": 0.12,
+		# Special row: 0 windup, 1 charge, 2 release, 3 hold, 4 recover, 5 settle.
+		# Frame 2 is the startup tick, when the clipboard leaves her hand.
+		"release_frame": 2,
 		"projectile": {
 			"speed": 820.0, "life": 0.9, "damage": 95.0,
 			"hitstun": 20, "blockstun": 12, "knockback": 260.0,

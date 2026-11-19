@@ -1,6 +1,7 @@
 extends Node
 
-## Regressions for menu confirm, intro input, and Karen's clipboard.
+## Regressions for menu confirm, pad cancel, intro input, AI spacing, and
+## Karen's clipboard.
 ##   godot --headless --path . res://tests/review_fixes.tscn
 
 const Harness := preload("res://tests/harness.gd")
@@ -33,11 +34,15 @@ func _run() -> void:
 	_check_bindings()
 	await _check_menus()
 	await _release_all()
+	await _check_picker_back()
+	await _release_all()
 	get_tree().paused = false
 	await _goto_blank()
+	await _check_pad_heavy()
 	await _check_intro_edges()
 	await _check_reset_edges()
 	await _check_clipboard()
+	await _check_ai_spacing()
 
 
 func _check_bindings() -> void:
@@ -66,6 +71,8 @@ func _check_bindings() -> void:
 	_ok(_has_joy("ui_accept", JOY_BUTTON_A, -1), "pad A is not bound to ui_accept")
 	_ok(_has_key("ui_accept", KEY_ENTER) and _has_key("ui_accept", KEY_SPACE),
 			"ui_accept lost its keyboard bindings")
+	_ok(_has_joy("ui_cancel", JOY_BUTTON_B, -1), "pad B is not bound to ui_cancel")
+	_ok(_has_key("ui_cancel", KEY_ESCAPE), "ui_cancel lost Escape")
 
 
 func _check_menus() -> void:
@@ -157,6 +164,128 @@ func _check_menus() -> void:
 	await _tap_joy(1, JOY_BUTTON_A)
 	await _frames(4)
 	_ok(_scene_is(Game.ARENA), "P2 pad A did not confirm results")
+
+
+func _check_picker_back() -> void:
+	Game.mode = "versus"
+	Game.p1_id = "dave"
+	Game.p2_id = "karen"
+	get_tree().change_scene_to_file(Game.CHAR_SELECT)
+	await _frames(4)
+	_ok(_scene_is(Game.CHAR_SELECT), "character select did not open for pad back")
+	await _tap_joy(0, JOY_BUTTON_B)
+	await _frames(4)
+	_ok(_scene_is(Game.MAIN_MENU), "pad B did not back out of character select (at %s)" % _scene_path())
+
+	Game.p1_id = "dave"
+	Game.p2_id = "karen"
+	Game.stage_id = "breakroom"
+	get_tree().change_scene_to_file(Game.STAGE_SELECT)
+	await _frames(4)
+	_ok(_scene_is(Game.STAGE_SELECT), "stage select did not open for pad back")
+	await _tap_joy(1, JOY_BUTTON_B)
+	await _frames(4)
+	_ok(_scene_is(Game.CHAR_SELECT), "pad B did not back out of stage select (at %s)" % _scene_path())
+
+
+func _check_pad_heavy() -> void:
+	var arena := await _spawn_arena("dave", "karen", "versus")
+	arena._enter_fight()
+	arena._accum = 0.0
+	arena.pause_menu.open()
+	await _tick([_joy_event(0, JOY_BUTTON_B, true)])
+	await _tick()
+	_ok(not get_tree().paused and not arena.pause_menu.visible, "pad B did not close pause")
+	_ok(arena.p1.move_name.is_empty(), "canceling pause with pad B started a heavy attack")
+	arena.pause_menu.close()
+	await _tick([_joy_event(0, JOY_BUTTON_B, false)])
+	await _tick()
+	await _tick([_joy_event(0, JOY_BUTTON_B, true)])
+	await _tick()
+	_ok(arena.p1.state == Fighter.State.ATTACK and arena.p1.move_name == "heavy",
+			"pad B during a match did not throw P1 heavy (state %s %s)" % [arena.p1.state, arena.p1.move_name])
+	_ok(not get_tree().paused and not arena.pause_menu.visible, "combat B opened pause")
+	await _tick([_joy_event(0, JOY_BUTTON_B, false)])
+	await _tick([_joy_event(1, JOY_BUTTON_B, true)])
+	await _tick()
+	_ok(arena.p2.state == Fighter.State.ATTACK and arena.p2.move_name == "heavy",
+			"pad B during a match did not throw P2 heavy (state %s %s)" % [arena.p2.state, arena.p2.move_name])
+	await _tick([_joy_event(1, JOY_BUTTON_B, false)])
+	arena.queue_free()
+	await _frames(2)
+
+
+## Normal AI, seed 7, stationary fighters 171px apart. Standing normals reach
+## about 148-166px, and the old 175px stop whiffed for ~18s. 120 ticks is 2s.
+func _check_ai_spacing() -> void:
+	var easy := AIController.new(1, "fight")
+	var normal := AIController.new(2, "fight")
+	var hard := AIController.new(3, "fight")
+	_ok(easy._interval > normal._interval and normal._interval > hard._interval,
+			"difficulty no longer changes how often the AI thinks")
+
+	# 2s at 60 Hz. The spacing bug took about 18s to land a hit.
+	var hit_ticks := 120
+	for id in CharacterDB.ORDER:
+		var arena := await _spawn_arena("dave", id, "versus", true, 2)
+		_ok(arena.ai != null and arena.ai.behavior == "fight",
+				"%s did not spawn a fighting AI" % id)
+		if arena.ai == null:
+			arena.queue_free()
+			await _frames(1)
+			continue
+		_park_spacing(arena, 171.0)
+		if id == CharacterDB.ORDER[0]:
+			arena.ai.behavior = "dummy"
+			var dummy := arena.ai.decide(arena.p2, arena.p1)
+			_ok(int(dummy["dir"]) == 0 and not bool(dummy["jump"]) and not bool(dummy["crouch"])
+					and not bool(dummy["light"]) and not bool(dummy["heavy"])
+					and not bool(dummy["special"]) and not bool(dummy["block"]),
+					"dummy AI produced inputs %s" % str(dummy))
+			arena.ai.behavior = "fight"
+		for move_name in AIController.GROUND_NORMALS:
+			_ok(not arena.ai.move_reaches(arena.p2, arena.p1, move_name),
+					"%s %s already reaches an idle fighter 171px away" % [id, move_name])
+		arena.ai._rng.seed = 7
+		var origin := arena.p2.pos.x
+		var before := arena.p1.health
+		var ticks := 0
+		while arena.p1.health >= before - 0.5 and ticks < hit_ticks:
+			arena._step()
+			ticks += 1
+		var gap := absf(arena.p2.pos.x - arena.p1.pos.x)
+		_ok(ticks < hit_ticks and arena.p1.health < before - 0.5,
+				"%s Normal AI seed 7 did not hit from 171px within %d ticks (took %d, hp %.1f, gap %.1f, move %s)" % [id, hit_ticks, ticks, arena.p1.health, gap, arena.p2.move_name])
+		_ok(arena.p2.pos.x < origin - 4.0,
+				"%s did not close distance before the hit (x %.1f -> %.1f)" % [id, origin, arena.p2.pos.x])
+		arena.queue_free()
+		await _frames(1)
+
+
+func _park_spacing(arena: Arena, gap: float) -> void:
+	arena._enter_fight()
+	arena._accum = 0.0
+	arena.router.discard()
+	var left := 480.0
+	for fighter in [arena.p1, arena.p2]:
+		fighter.state = Fighter.State.IDLE
+		fighter.state_tick = 0
+		fighter.vel = Vector2.ZERO
+		fighter.airborne = false
+		fighter.crouching = false
+		fighter.blocking = false
+		fighter.hitstop = 0
+		fighter.knockout = false
+		fighter.health = float(fighter.data["build"]["health"])
+		fighter.meter = 0.0
+		fighter.move = {}
+		fighter.move_name = ""
+	arena.p1.pos = Vector2(left, CharacterDB.GROUND_Y)
+	arena.p2.pos = Vector2(left + gap, CharacterDB.GROUND_Y)
+	arena.p1.position = arena.p1.pos
+	arena.p2.position = arena.p2.pos
+	arena.p1.facing = 1
+	arena.p2.facing = -1
 
 
 func _check_intro_edges() -> void:
@@ -344,11 +473,13 @@ func _place(arena: Arena) -> void:
 	arena.p2.vel = Vector2.ZERO
 
 
-func _spawn_arena(p1_id: String, p2_id: String, mode: String) -> Arena:
+func _spawn_arena(p1_id: String, p2_id: String, mode: String, ai := false, difficulty := 2) -> Arena:
 	Game.mode = mode
+	Game.p2_is_ai = ai
+	Game.difficulty = difficulty
 	Game.match_config = {
 		"mode": mode, "p1": p1_id, "p2": p2_id, "stage": "breakroom",
-		"p2_is_ai": false, "difficulty": 2,
+		"p2_is_ai": ai, "difficulty": difficulty,
 		"round_wins_needed": Game.rounds_to_win(mode),
 	}
 	var arena: Arena = load(Game.ARENA).instantiate()
@@ -426,6 +557,13 @@ func _frames(count: int) -> void:
 func _scene_is(path: String) -> bool:
 	var scene := get_tree().current_scene
 	return scene != null and scene.scene_file_path == path
+
+
+func _scene_path() -> String:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return "<none>"
+	return scene.scene_file_path
 
 
 func _focus_text() -> String:

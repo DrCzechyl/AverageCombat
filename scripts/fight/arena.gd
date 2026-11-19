@@ -280,10 +280,11 @@ func _step_intro() -> void:
 	p1.tick(InputRouter.blank())
 	p2.tick(InputRouter.blank())
 	phase_ticks -= 1
-	if phase_ticks == 80:
+	if phase_ticks <= 0:
+		# Bell and FIGHT land on the tick that unlocks controls. Training reset
+		# also enters FIGHT, through _training_reset, and keeps the RESET cue.
 		_announce("FIGHT!", 60)
 		Sfx.play("bell", -7.0, 1.0, 0.0)
-	if phase_ticks <= 0:
 		_enter_fight()
 
 
@@ -303,19 +304,22 @@ func _step_fight() -> void:
 	else:
 		in2 = router.get_frame(1)
 
+	# Freeze carried in from an earlier tick. Hits resolved below apply new
+	# hitstop only after this tick's melee and projectile contacts are known,
+	# so a jab cannot erase a clipboard released on the same tick.
+	var frozen := p1.hitstop > 0 or p2.hitstop > 0
 	p1.tick(in1)
 	p2.tick(in2)
 
-	_handle_spawns()
-	_resolve_melee()
-	# Hitstop freezes projectiles and the clock. The impact step already resolved.
-	var frozen := p1.hitstop > 0 or p2.hitstop > 0
 	if not frozen:
-		_update_projectiles()
+		_resolve_fight_contacts()
 	_handle_landings()
 	_update_combos()
 	_check_ko()
-	if phase == Phase.FIGHT and not frozen:
+	# The clock still stops while hitstop remains after the tick. The frame
+	# that spends the last point is not frozen for the clock; a KO this tick
+	# has already left FIGHT and still beats TIME.
+	if phase == Phase.FIGHT and p1.hitstop <= 0 and p2.hitstop <= 0:
 		_update_timer()
 
 
@@ -379,6 +383,20 @@ func _apply_camera(extra: float) -> void:
 
 
 func _resolve_melee() -> void:
+	_apply_contacts(_collect_melee_contacts())
+
+
+func _resolve_fight_contacts() -> void:
+	# Melee and projectiles that spawn or move this tick are all eligible
+	# before any of them mutate health, armor, or hitstop. New hitstop then
+	# freezes later ticks only.
+	_handle_spawns()
+	var contacts := _collect_melee_contacts()
+	contacts.append_array(_collect_projectile_contacts(true))
+	_apply_contacts(contacts)
+
+
+func _collect_melee_contacts() -> Array[Dictionary]:
 	# Capture every eligible contact before either fighter is mutated. Applying
 	# P1 first used to cancel an overlapping P2 hit, so equal lethal jabs became
 	# a sole P1 KO and an armored P1 never took the trade.
@@ -393,21 +411,33 @@ func _resolve_melee() -> void:
 			continue
 		if not hit["rect"].intersects(defender.hurtbox()):
 			continue
+		var info: Dictionary = hit["move"].duplicate()
+		info["damage"] = float(hit["damage"])
 		contacts.append({
 			"attacker_index": i,
 			"defender": defender,
-			"hit": hit,
+			"info": info,
+			"rect": hit["rect"],
 			"blocked": defender.is_guarding(str(hit["height"])),
 			"dir": attacker.facing,
 		})
+	return contacts
+
+
+func _apply_contacts(contacts: Array[Dictionary]) -> void:
 	for contact in contacts:
 		var attacker_index: int = contact["attacker_index"]
-		var hit: Dictionary = contact["hit"]
-		var info: Dictionary = hit["move"].duplicate()
-		info["damage"] = float(hit["damage"])
-		_fighter(attacker_index).move_has_hit = true
-		_apply_contact(attacker_index, contact["defender"], info, hit["rect"],
-				contact["blocked"], contact["dir"])
+		var defender: Fighter = contact["defender"]
+		var projectile: Projectile = contact.get("projectile")
+		# A knocked-out attacker can still trade. A knocked-out defender has
+		# already lost this exchange, so a second contact adds no hit or meter.
+		if not defender.knockout:
+			if projectile == null:
+				_fighter(attacker_index).move_has_hit = true
+			_apply_contact(attacker_index, defender, contact["info"], contact["rect"],
+					contact["blocked"], contact["dir"])
+		if projectile != null:
+			_retire_projectile(projectile)
 
 
 func _apply_contact(attacker_index: int, defender: Fighter, info: Dictionary, rect: Rect2,
@@ -477,8 +507,12 @@ func _handle_spawns() -> void:
 
 
 func _update_projectiles() -> void:
-	# After TIME or K.O., projectiles advance for presentation.
-	var resolve := phase == Phase.FIGHT
+	# After TIME or K.O., projectiles advance for presentation and do not hit.
+	_apply_contacts(_collect_projectile_contacts(phase == Phase.FIGHT))
+
+
+func _collect_projectile_contacts(resolve: bool) -> Array[Dictionary]:
+	var contacts: Array[Dictionary] = []
 	for proj in projectiles.duplicate():
 		if not is_instance_valid(proj):
 			projectiles.erase(proj)
@@ -495,12 +529,19 @@ func _update_projectiles() -> void:
 			var rect: Rect2 = proj.hitbox()
 			if defender.can_be_hit() and rect.intersects(defender.hurtbox()):
 				proj.connected = true
-				var blocked := defender.is_guarding(str(proj.info.get("height", "mid")))
-				_apply_contact(proj.owner_index, defender, proj.info, rect, blocked, proj.facing)
-				_retire_projectile(proj)
+				contacts.append({
+					"attacker_index": proj.owner_index,
+					"defender": defender,
+					"info": proj.info,
+					"rect": rect,
+					"blocked": defender.is_guarding(str(proj.info.get("height", "mid"))),
+					"dir": proj.facing,
+					"projectile": proj,
+				})
 				continue
 		if proj.dead:
 			_retire_projectile(proj)
+	return contacts
 
 
 func _update_combos() -> void:
@@ -764,11 +805,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("reset_round"):
-		if not finished:
-			if training:
-				_training_reset()
-			else:
-				_start_round()
+		# F5 is a training reset. It must not reopen a competitive round or a
+		# match that has already been decided.
+		if training and not finished:
+			_training_reset()
 		get_viewport().set_input_as_handled()
 
 
@@ -854,8 +894,8 @@ func _present(alpha: float) -> void:
 	if p1 == null or p2 == null:
 		return
 	var blend := clampf(alpha, 0.0, 1.0)
-	p1.position = _quantize_px(_vis_prev_p1.lerp(_vis_curr_p1, blend))
-	p2.position = _quantize_px(_vis_prev_p2.lerp(_vis_curr_p2, blend))
+	p1.present_at(_quantize_px(_vis_prev_p1.lerp(_vis_curr_p1, blend)))
+	p2.present_at(_quantize_px(_vis_prev_p2.lerp(_vis_curr_p2, blend)))
 	for proj in projectiles:
 		if not is_instance_valid(proj):
 			continue

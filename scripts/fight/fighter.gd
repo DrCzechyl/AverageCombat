@@ -218,7 +218,7 @@ func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 	# Recovery can end on the same tick a buffered press is still valid. Fire it
 	# before the window counts down, and don't spend the window during hitstop.
 	if state == State.IDLE or state == State.WALK or state == State.CROUCH or state == State.AIR:
-		_try_buffered()
+		_try_buffered(inp)
 	_decay_buffer()
 	_update_visuals()
 
@@ -245,7 +245,7 @@ func _tick_free(inp: Dictionary) -> void:
 	var holding_back := dir != 0 and dir == -facing
 	blocking = (bool(inp.get("block", false)) or holding_back) and not airborne
 
-	if _try_buffered():
+	if _try_buffered(inp):
 		return
 
 	# Attacks take priority over movement.
@@ -340,7 +340,7 @@ func _clear_buffer() -> void:
 	_buf_ticks = 0
 
 
-func _try_buffered() -> bool:
+func _try_buffered(inp: Dictionary) -> bool:
 	if _buf_ticks <= 0 or _buf_action == "":
 		return false
 	var action := _buf_action
@@ -350,6 +350,11 @@ func _try_buffered() -> bool:
 			return false
 		_begin_jump()
 		return true
+	# Recovery and stun leave `crouching` where the previous move put it, so a
+	# down-held light was coming out as a jab. Grounded normals take the stance
+	# held on the tick the buffer is spent. Air attacks ignore that hold.
+	if not airborne and (action == "light" or action == "heavy"):
+		crouching = bool(inp.get("crouch", false))
 	return _try_attack({
 		"special": action == "special",
 		"heavy": action == "heavy",
@@ -499,11 +504,8 @@ func active_hit() -> Dictionary:
 	var active := int(move.get("active", 1))
 	if move_tick < startup or move_tick >= startup + active:
 		return {}
-	var box: Rect2 = move["hitbox"]
-	if facing < 0:
-		box = Rect2(-(box.position.x + box.size.x), box.position.y, box.size.x, box.size.y)
 	return {
-		"rect": Rect2(box.position + pos, box.size),
+		"rect": move_hitbox(move, facing),
 		"move": move,
 		"name": move_name,
 		"height": str(move.get("height", "mid")),
@@ -511,6 +513,14 @@ func active_hit() -> Dictionary:
 		"startup": startup,
 		"owner": self,
 	}
+
+
+func move_hitbox(move_data: Dictionary, face_dir: int) -> Rect2:
+	var box: Rect2 = move_data["hitbox"]
+	if face_dir < 0:
+		box.position.x = -box.end.x
+	box.position += pos
+	return box
 
 
 func hurtbox() -> Rect2:
@@ -657,13 +667,25 @@ func reset_visuals() -> void:
 	shadow.scale = Vector2(2.2, 1.0)
 
 
-func _update_visuals(frozen := false) -> void:
-	sprite.flip_h = facing < 0
+## Arena._present should pass its quantized blend here instead of writing
+## `position` directly. `pos` stays on the simulated feet; the shadow is anchored
+## to the floor under the rendered body so a jump's first interpolated frame
+## does not drop the blob through the ground.
+func present_at(at: Vector2) -> void:
+	position = at
+	_anchor_shadow(at.y)
 
-	var air_height := CharacterDB.GROUND_Y - pos.y
+
+func _anchor_shadow(feet_y: float) -> void:
+	var air_height := CharacterDB.GROUND_Y - feet_y
 	shadow.position = Vector2(0, air_height)
 	shadow.scale = Vector2(2.2 * clampf(1.0 - air_height / 1400.0, 0.55, 1.0), 1.0)
 	shadow.modulate = Color(1, 1, 1, clampf(0.6 - air_height / 900.0, 0.18, 0.6))
+
+
+func _update_visuals(frozen := false) -> void:
+	sprite.flip_h = facing < 0
+	_anchor_shadow(pos.y)
 
 	if flash_ticks > 0:
 		sprite.modulate = Color(1.9, 1.9, 1.9)
@@ -763,9 +785,7 @@ func _update_anim() -> void:
 		if anim == "jump":
 			frame = 0 if vel.y < 0.0 else 1
 		elif not move.is_empty():
-			var count := int(CharacterDB.ANIMS[anim]["frames"])
-			frame = _move_pose_frame(move_tick, int(move.get("startup", 1)),
-					int(move.get("active", 1)), count)
+			frame = _move_pose_frame(move, move_tick)
 		if _anim_name != anim or sprite.animation != anim:
 			sprite.play(anim)
 		sprite.set_frame_and_progress(frame, 0.0)
@@ -781,19 +801,29 @@ func _update_anim() -> void:
 		sprite.speed_scale = 1.0
 
 
-func _move_pose_frame(tick: int, startup: int, active: int, count: int) -> int:
+func _move_pose_frame(move_data: Dictionary, tick: int) -> int:
+	var anim_name := str(move_data.get("anim", "light"))
+	var count := int(CharacterDB.ANIMS[anim_name]["frames"])
 	if count <= 1:
 		return 0
-	var strike := count - 2
+	var startup := int(move_data.get("startup", 1))
+	var active := int(move_data.get("active", 1))
+	# Melee holds the second-to-last pose on active ticks. Throws can identify
+	# an earlier release, leaving more sheet frames to play during recovery.
+	var strike := clampi(int(move_data.get("release_frame", count - 2)), 0, count - 1)
 	if tick < startup:
 		if strike <= 0:
 			return 0
 		var span := maxi(startup - 1, 1)
 		var idx := int(float(maxi(tick - 1, 0)) * float(strike) / float(span))
 		return clampi(idx, 0, strike - 1)
-	if tick < startup + active:
+	if tick < startup + active or strike == count - 1:
 		return strike
-	return count - 1
+	var first := strike + 1
+	var recovery := maxi(int(move_data.get("recovery", 1)), 1)
+	var recovery_tick := tick - startup - active
+	var idx := int(float(recovery_tick) * float(count - first) / float(recovery))
+	return mini(first + idx, count - 1)
 
 
 func _play_anim(anim: String, restart := false) -> void:

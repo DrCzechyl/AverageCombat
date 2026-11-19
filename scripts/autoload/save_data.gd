@@ -28,9 +28,11 @@ const DEFAULT_STATS := {
 	"damage_dealt": 0.0,
 }
 
+const DEFAULT_PICKS := {"p1": "dave", "p2": "karen", "stage": "breakroom"}
+
 var settings: Dictionary = {}
 var stats: Dictionary = {}
-var last_picks: Dictionary = {"p1": "dave", "p2": "karen", "stage": "breakroom"}
+var last_picks: Dictionary = DEFAULT_PICKS.duplicate()
 
 
 func _init() -> void:
@@ -60,24 +62,32 @@ func load_game() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(save_path) != OK:
 		return
-	for key in settings.keys():
-		settings[key] = cfg.get_value("settings", key, settings[key])
-	for key in stats.keys():
-		stats[key] = cfg.get_value("stats", key, stats[key])
-	for key in last_picks.keys():
-		last_picks[key] = cfg.get_value("last", key, last_picks[key])
-	# Clamp anything a hand-edited config might have broken.
-	settings["volume"] = clampf(float(settings["volume"]), 0.0, 1.0)
-	settings["difficulty"] = clampi(int(settings["difficulty"]), 1, 3)
+
+	var volume := _read_number(cfg, "settings", "volume", DEFAULT_SETTINGS["volume"])
+	settings["volume"] = clampf(volume, 0.0, 1.0)
+	var difficulty := _read_number(cfg, "settings", "difficulty", DEFAULT_SETTINGS["difficulty"])
+	settings["difficulty"] = int(clampf(difficulty, 1.0, 3.0))
 	for key in ["screen_shake", "hitstop", "show_hitboxes", "fullscreen"]:
-		if not (settings[key] is bool):
-			settings[key] = DEFAULT_SETTINGS[key]
-	if last_picks["p1"] not in CharacterDB.ORDER:
-		last_picks["p1"] = "dave"
-	if last_picks["p2"] not in CharacterDB.ORDER:
-		last_picks["p2"] = "karen"
-	if last_picks["stage"] not in StageDB.ORDER:
-		last_picks["stage"] = "breakroom"
+		var value: Variant = cfg.get_value("settings", key, DEFAULT_SETTINGS[key])
+		settings[key] = value if value is bool else DEFAULT_SETTINGS[key]
+
+	for key in ["matches", "wins", "best_combo", "arcade_clears"]:
+		var value: Variant = cfg.get_value("stats", key, DEFAULT_STATS[key])
+		stats[key] = value if value is int and value >= 0 else DEFAULT_STATS[key]
+	var damage := _read_number(cfg, "stats", "damage_dealt", DEFAULT_STATS["damage_dealt"])
+	stats["damage_dealt"] = maxf(0.0, damage)
+
+	for key in DEFAULT_PICKS:
+		var pick: Variant = cfg.get_value("last", key, DEFAULT_PICKS[key])
+		var choices := StageDB.ORDER if key == "stage" else CharacterDB.ORDER
+		last_picks[key] = pick if pick is String and pick in choices else DEFAULT_PICKS[key]
+
+
+func _read_number(cfg: ConfigFile, section: String, key: String, fallback: float) -> float:
+	var value: Variant = cfg.get_value(section, key, fallback)
+	if value is int or (value is float and is_finite(value)):
+		return float(value)
+	return fallback
 
 
 func save_game() -> void:

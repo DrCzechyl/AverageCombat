@@ -21,6 +21,7 @@ var difficulty := 2
 var arcade := {"ladder": [], "index": 0, "cleared": false}
 var results: Dictionary = {}
 var match_config: Dictionary = {}
+var _quitting := false
 
 
 func _ready() -> void:
@@ -28,6 +29,8 @@ func _ready() -> void:
 	p2_id = SaveData.last_picks.get("p2", "karen")
 	stage_id = SaveData.last_picks.get("stage", "breakroom")
 	difficulty = int(SaveData.settings.get("difficulty", 2))
+	get_tree().auto_accept_quit = false
+	get_tree().root.close_requested.connect(quit)
 
 
 func goto(path: String) -> void:
@@ -36,6 +39,14 @@ func goto(path: String) -> void:
 
 func go_main_menu() -> void:
 	goto(MAIN_MENU)
+
+
+func quit() -> void:
+	if _quitting:
+		return
+	_quitting = true
+	await Sfx.drain_for_exit()
+	get_tree().quit()
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		accept_event()
 		return
 	if visible and event.is_action_pressed("ui_cancel"):
+		if arena != null:
+			arena.router.consume_menu_press(event)
 		close()
 		accept_event()
 

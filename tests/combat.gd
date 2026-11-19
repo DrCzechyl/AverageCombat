@@ -3,8 +3,9 @@ extends Node
 ## Headless combat-resolution regressions. Run with:
 ##   godot --headless --path . res://tests/combat.tscn
 ##
-## Covers round-lock projectile resolution, symmetric melee trades, and
-## match-damage accounting. Smoke, flow, and the runner live elsewhere.
+## Covers round-lock projectile resolution, symmetric melee trades,
+## match-damage accounting, hitstop exchanges, the FIGHT cue, and F5.
+## Smoke, flow, and the runner live elsewhere.
 
 const Harness := preload("res://tests/harness.gd")
 
@@ -18,6 +19,9 @@ func _ready() -> void:
 	await _check_outcome_lock()
 	await _check_symmetric_trades()
 	await _check_match_damage()
+	await _check_hitstop_exchange()
+	await _check_fight_cue()
+	await _check_reset_is_training_only()
 	_report()
 
 
@@ -373,6 +377,230 @@ func _check_match_damage() -> void:
 	_ok(kill_clip.p2.vel.x > 0.0, "clipboard knockback ignored facing at contact")
 	kill_clip.queue_free()
 	await get_tree().process_frame
+
+
+func _check_hitstop_exchange() -> void:
+	# 72px is the closest the bodies can stand. Karen's clipboard leaves her
+	# hand on the same tick Dave's jab connects. Hitstop must not turn that
+	# trade into a Dave win.
+	for hitstop_on in [false, true]:
+		SaveData.settings["hitstop"] = hitstop_on
+		var arena := await _make_arena("dave", "karen")
+		_place(arena.p1, arena.p2, 600.0, 672.0)
+		arena.p1.health = 1.0
+		arena.p2.health = 1.0
+		_prime(arena.p1, "jab")
+		arena.p1.move_tick -= 1
+		_prime(arena.p2, "special")
+		arena.p2.move_tick -= 1
+		arena.damage_done = [0.0, 0.0]
+		arena._step()
+		var label := "on" if hitstop_on else "off"
+		_ok(arena.p1.knockout and arena.p2.knockout,
+				"lethal jab/clipboard at 72px did not KO both with hitstop %s" % label)
+		_ok(is_equal_approx(arena.p1.health, 0.0) and is_equal_approx(arena.p2.health, 0.0),
+				"lethal jab/clipboard at 72px left health with hitstop %s" % label)
+		_ok(arena.ko_winner == -1 and arena.phase == Arena.Phase.KO,
+				"lethal jab/clipboard at 72px awarded a sole winner with hitstop %s" % label)
+		_ok(arena.announce_text == "K.O." and arena.announce_sub == "DOUBLE KO",
+				"lethal jab/clipboard at 72px was not a double KO with hitstop %s (%s / %s)" % [label, arena.announce_text, arena.announce_sub])
+		_ok(is_equal_approx(arena.damage_done[0], 1.0) and is_equal_approx(arena.damage_done[1], 1.0),
+				"lethal jab/clipboard match damage was not remaining HP with hitstop %s" % label)
+		if hitstop_on:
+			_ok(arena.p1.hitstop == 9 and arena.p2.hitstop == 9,
+					"same-tick trade stored hitstop %d/%d for later ticks" % [arena.p1.hitstop, arena.p2.hitstop])
+		else:
+			_ok(arena.p1.hitstop == 0 and arena.p2.hitstop == 0,
+					"hitstop off still froze the jab/clipboard trade")
+		arena.queue_free()
+		await get_tree().process_frame
+
+	var double_contact := await _make_arena("karen", "dave")
+	_place(double_contact.p1, double_contact.p2, 600.0, 672.0)
+	double_contact.p2.health = 1.0
+	var incoming := _spawn_clipboard(double_contact, double_contact.p1,
+			Vector2(660.0, CharacterDB.GROUND_Y - 158.0))
+	_prime(double_contact.p1, "jab")
+	double_contact.p1.move_tick -= 1
+	double_contact._step()
+	_ok(double_contact.p2.knockout and double_contact.best_combo[0] == 1,
+			"a second same-tick contact counted as a hit on a defeated fighter")
+	_ok(incoming not in double_contact.projectiles,
+			"the same-tick projectile contact was not retired")
+	double_contact.queue_free()
+	await get_tree().process_frame
+
+	# A tick that is already frozen does not move or connect a clipboard.
+	# The next open tick does. Leftover hitstop after K.O. still lets it travel.
+	SaveData.settings["hitstop"] = true
+	var held := await _make_arena("karen", "dave")
+	_place(held.p1, held.p2, 400.0, 900.0)
+	var clip := _spawn_clipboard(held, held.p1, Vector2(held.p2.pos.x, CharacterDB.GROUND_Y - 196.0))
+	var start_x := clip.position.x
+	var hp := held.p2.health
+	held.p1.hitstop = 1
+	held.p2.hitstop = 1
+	held._step()
+	_ok(clip in held.projectiles and is_equal_approx(clip.position.x, start_x),
+			"frozen tick advanced or removed the clipboard")
+	_ok(is_equal_approx(held.p2.health, hp) and not held.p2.knockout and held.phase == Arena.Phase.FIGHT,
+			"frozen tick resolved an overlapping clipboard")
+	_ok(held.p1.hitstop == 0 and held.p2.hitstop == 0,
+			"the last point of hitstop did not finish counting down")
+	held._step()
+	_ok(held.p2.health < hp and clip not in held.projectiles,
+			"clipboard did not connect on the first tick after hitstop")
+	held.queue_free()
+	await get_tree().process_frame
+
+	var ko := await _make_arena("karen", "dave")
+	_place(ko.p1, ko.p2, 400.0, 900.0)
+	var shown := _spawn_clipboard(ko, ko.p1, Vector2(ko.p2.pos.x, CharacterDB.GROUND_Y - 196.0))
+	var shown_x := shown.position.x
+	ko.phase = Arena.Phase.KO
+	ko.phase_ticks = 40
+	ko.slowmo = 0
+	ko.ko_winner = 1
+	ko.p1.hitstop = 8
+	ko.p2.hitstop = 8
+	ko.p2.health = 90.0
+	ko._step()
+	_ok(shown in ko.projectiles and shown.position.x > shown_x,
+			"KO presentation froze the clipboard during hitstop")
+	_ok(is_equal_approx(ko.p2.health, 90.0) and not ko.p2.knockout and ko.ko_winner == 1,
+			"KO presentation resolved a clipboard during hitstop")
+	ko.queue_free()
+	await get_tree().process_frame
+
+
+func _check_fight_cue() -> void:
+	var arena := await _make_arena("dave", "karen")
+	arena.phase = Arena.Phase.INTRO
+	arena.phase_ticks = 81
+	arena.announce_text = "ROUND 1"
+	arena.announce_ticks = 40
+	_stop_sfx()
+	arena._step_intro()
+	_ok(arena.phase == Arena.Phase.INTRO and arena.phase_ticks == 80,
+			"intro reached FIGHT before the cue")
+	_ok(arena.announce_text == "ROUND 1" and not _bell_playing(),
+			"FIGHT cue fired while the round was still in the intro")
+	arena.phase_ticks = 1
+	arena._step_intro()
+	_ok(arena.phase == Arena.Phase.FIGHT and arena.phase_ticks == 0,
+			"FIGHT cue did not unlock controls")
+	_ok(arena.announce_text == "FIGHT!" and arena.announce_ticks == 60 and _bell_playing(),
+			"bell and FIGHT did not land on the tick the phase became FIGHT")
+	arena.queue_free()
+	await get_tree().process_frame
+
+	var reset := await _make_arena("dave", "karen")
+	reset.training = true
+	reset.p1.meter = 40.0
+	reset.p2.meter = 15.0
+	_stop_sfx()
+	reset._training_reset()
+	_ok(reset.phase == Arena.Phase.FIGHT and reset.announce_text == "RESET"
+			and reset.announce_ticks == 40,
+			"training reset lost the RESET cue")
+	_ok(not _bell_playing(), "training reset played the fight bell")
+	_ok(is_equal_approx(reset.p1.meter, 40.0) and is_equal_approx(reset.p2.meter, 15.0),
+			"training reset cleared meter")
+	reset.queue_free()
+	await get_tree().process_frame
+
+
+func _check_reset_is_training_only() -> void:
+	var arena := await _make_arena("dave", "karen")
+	arena.training = false
+	arena.round_number = 2
+	arena.round_wins = [1, 0]
+	arena.phase = Arena.Phase.KO
+	arena.phase_ticks = 40
+	arena.ko_winner = 0
+	arena.p1.health = 12.0
+	arena.p2.health = 0.0
+	arena.announce_text = "K.O."
+	arena.announce_sub = "DAVE WINS THE ROUND"
+	_press_reset(arena)
+	_ok(arena.phase == Arena.Phase.KO and arena.ko_winner == 0 and arena.phase_ticks == 40,
+			"F5 reopened a decided round")
+	_ok(arena.round_number == 2 and arena.round_wins[0] == 1 and arena.round_wins[1] == 0,
+			"F5 changed the score of a decided round")
+	_ok(is_equal_approx(arena.p1.health, 12.0) and arena.announce_text == "K.O.",
+			"F5 restarted fighters after the round was decided")
+
+	arena.phase = Arena.Phase.ROUND_END
+	arena.phase_ticks = 25
+	_press_reset(arena)
+	_ok(arena.phase == Arena.Phase.ROUND_END and arena.phase_ticks == 25 and arena.round_number == 2,
+			"F5 reopened a round that was already awarded")
+
+	arena.phase = Arena.Phase.MATCH_END
+	arena.phase_ticks = 30
+	arena.finished = false
+	arena.round_wins = [2, 0]
+	arena.announce_text = "DAVE WINS"
+	_press_reset(arena)
+	_ok(arena.phase == Arena.Phase.MATCH_END and not arena.finished
+			and arena.round_wins[0] == 2 and arena.round_wins[1] == 0,
+			"F5 reopened a decided match")
+	_ok(arena.announce_text == "DAVE WINS" and arena.round_number == 2,
+			"F5 restarted a finished match")
+
+	arena.phase = Arena.Phase.FIGHT
+	arena.phase_ticks = 0
+	arena.round_time = 40.0
+	arena.p1.health = 80.0
+	_press_reset(arena)
+	_ok(arena.phase == Arena.Phase.FIGHT and is_equal_approx(arena.round_time, 40.0)
+			and is_equal_approx(arena.p1.health, 80.0) and arena.round_number == 2,
+			"F5 reset a competitive round that was still being fought")
+
+	arena.training = true
+	arena.phase = Arena.Phase.KO
+	arena.phase_ticks = 10
+	arena.ko_winner = 1
+	arena.finished = false
+	arena.p1.health = 80.0
+	arena.p2.health = 0.0
+	arena.p1.meter = 33.0
+	_press_reset(arena)
+	_ok(arena.phase == Arena.Phase.FIGHT and arena.announce_text == "RESET",
+			"training F5 did not reset into FIGHT with the RESET cue")
+	_ok(is_equal_approx(arena.p1.health, float(arena.p1.data["build"]["health"]))
+			and is_equal_approx(arena.p2.health, float(arena.p2.data["build"]["health"])),
+			"training F5 did not heal both fighters")
+	_ok(is_equal_approx(arena.p1.meter, 33.0), "training F5 cleared meter")
+	_ok(arena.round_wins[0] == 2 and arena.round_number == 2,
+			"training F5 changed the match score")
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _press_reset(arena: Arena) -> void:
+	var event := InputEventAction.new()
+	event.action = "reset_round"
+	event.pressed = true
+	arena._unhandled_input(event)
+
+
+func _stop_sfx() -> void:
+	if not is_instance_valid(Sfx):
+		return
+	for child in Sfx.get_children():
+		if child is AudioStreamPlayer:
+			child.stop()
+
+
+func _bell_playing() -> bool:
+	if not is_instance_valid(Sfx):
+		return false
+	for child in Sfx.get_children():
+		if child is AudioStreamPlayer and child.playing and child.stream != null:
+			if str(child.stream.resource_path).ends_with("bell.wav"):
+				return true
+	return false
 
 
 func _report() -> void:

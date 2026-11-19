@@ -72,6 +72,14 @@ func finish_release() -> void:
 	_streams.clear()
 
 
+func drain_for_exit() -> void:
+	release_for_exit()
+	# Let the audio thread finish with the stopped playbacks before freeing them.
+	await get_tree().create_timer(0.15, true, false, true).timeout
+	finish_release()
+	await get_tree().create_timer(0.05, true, false, true).timeout
+
+
 func _exit_tree() -> void:
 	if _released:
 		return

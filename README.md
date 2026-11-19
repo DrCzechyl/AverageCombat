@@ -36,7 +36,8 @@ gamepads work too.
 
 Gamepads: pad 1 drives P1, pad 2 drives P2. D-pad or left stick to move,
 `A/B/X/Y` for light/heavy/special/block, `Start` to pause during a match.
-Use the D-pad to navigate menus and `A` to confirm.
+Use the D-pad to navigate menus and `A` to confirm. `B` backs out of character
+select and stage select and closes the pause menu.
 
 **Blocking rules** are Mortal Kombat-ish: hold back or the block key. Standing
 block stops high and mid attacks, crouch block stops low and mid. Sweeps knock
@@ -48,6 +49,7 @@ down. Attacking builds meter; a full special costs 50 of 100.
 - **Arcade** - fight the other three characters in a shuffled ladder, one round
   per opponent, and get a results screen between fights.
 - **Training** - a passive dummy, infinite time, automatic reset after a KO.
+  Press `F5` to reset both fighters during training.
 
 ## Roster
 

@@ -7,15 +7,32 @@ extends RefCounted
 ## This is the seam where online play will eventually plug in: replace
 ## get_frame() with frames received from the netcode and nothing else changes.
 
+const EDGE_ACTIONS := ["up", "light", "heavy", "special"]
+
 var _press: Array = [{}, {}]
+var _ignore_through: Array = [{}, {}]
 
 
 func poll() -> void:
+	var tick := Engine.get_physics_frames()
 	for i in 2:
 		var prefix := "p%d_" % (i + 1)
-		for action in ["up", "light", "heavy", "special"]:
-			if Input.is_action_just_pressed(prefix + action):
+		for action in EDGE_ACTIONS:
+			if tick > int(_ignore_through[i].get(action, -1)) \
+					and Input.is_action_just_pressed(prefix + action):
 				_press[i][action] = true
+
+
+func consume_menu_press(event: InputEvent) -> void:
+	# GUI consumption does not affect Input polling. The pause event can also
+	# be reported as a fresh combat press on the next physics tick.
+	var through := Engine.get_physics_frames() + 1
+	for i in 2:
+		var prefix := "p%d_" % (i + 1)
+		for action in EDGE_ACTIONS:
+			if event.is_action_pressed(prefix + action):
+				_press[i].erase(action)
+				_ignore_through[i][action] = through
 
 
 ## Drops latched attack and jump edges. The arena calls this outside FIGHT and

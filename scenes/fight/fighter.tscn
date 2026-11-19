@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/fight/fighter.gd" id="1_fighter"]
+[ext_resource type="Texture2D" path="res://assets/sprites/fx/shadow.png" id="2_shadow"]
+
+[node name="Fighter" type="Node2D"]
+script = ExtResource("1_fighter")
+
+[node name="Shadow" type="Sprite2D" parent="."]
+texture_filter = 1
+position = Vector2(0, -6)
+scale = Vector2(2.2, 1)
+texture = ExtResource("2_shadow")
+modulate = Color(1, 1, 1, 0.55)
+
+[node name="Sprite" type="AnimatedSprite2D" parent="."]
+texture_filter = 1
+offset = Vector2(0, -47)
+scale = Vector2(3, 3)

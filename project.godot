@@ -1,0 +1,39 @@
+; Engine configuration file.
+
+config_version=5
+
+[application]
+
+config/name="Average Combat"
+config/description="An everyday fighting game."
+run/main_scene="res://scenes/ui/main_menu.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://icon.png"
+boot_splash/bg_color=Color(0.06, 0.07, 0.1, 1)
+boot_splash/show_image=false
+
+[autoload]
+
+SaveData="*res://scripts/autoload/save_data.gd"
+Controls="*res://scripts/autoload/controls.gd"
+Sfx="*res://scripts/autoload/sfx.gd"
+UITheme="*res://scripts/autoload/ui_theme.gd"
+Game="*res://scripts/autoload/game.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[physics]
+
+common/physics_ticks_per_second=60
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.06, 0.07, 0.1, 1)

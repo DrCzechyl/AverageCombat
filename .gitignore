@@ -1,0 +1,11 @@
+# Godot
+.godot/
+*.translation
+
+# Python tooling
+.venv/
+__pycache__/
+*.pyc
+
+# OS noise
+.DS_Store

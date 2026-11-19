@@ -8,8 +8,8 @@ extends Node
 
 const PATH := "user://average_combat.cfg"
 
-## Active file. Tests replace this with an absolute temp path before _ready.
 var save_path: String = PATH
+var _test_dir: DirAccess
 
 const DEFAULT_SETTINGS := {
 	"volume": 0.8,
@@ -35,11 +35,16 @@ var last_picks: Dictionary = {"p1": "dave", "p2": "karen", "stage": "breakroom"}
 
 func _init() -> void:
 	if _cmdline_requests_test_isolation():
-		save_path = _isolated_save_path()
+		save_path = ""
+		_test_dir = DirAccess.create_temp("average_combat_test")
+		if _test_dir == null:
+			push_error("Could not create a temporary save directory for the test scene.")
+		else:
+			save_path = _test_dir.get_current_dir().path_join(PATH.get_file())
 
 
 func is_isolated() -> bool:
-	return save_path != PATH
+	return _test_dir != null
 
 
 func _ready() -> void:
@@ -50,6 +55,8 @@ func _ready() -> void:
 
 
 func load_game() -> void:
+	if save_path.is_empty():
+		return
 	var cfg := ConfigFile.new()
 	if cfg.load(save_path) != OK:
 		return
@@ -74,6 +81,8 @@ func load_game() -> void:
 
 
 func save_game() -> void:
+	if save_path.is_empty():
+		return
 	var cfg := ConfigFile.new()
 	for key in settings:
 		cfg.set_value("settings", key, settings[key])
@@ -128,24 +137,15 @@ func reset_stats() -> void:
 
 
 func discard_isolated_save() -> void:
-	if save_path == PATH:
-		return
-	if FileAccess.file_exists(save_path):
-		DirAccess.remove_absolute(save_path)
+	if _test_dir != null:
+		save_path = ""
+		_test_dir = null
 
 
 func _cmdline_requests_test_isolation() -> bool:
-	var groups: Array = [OS.get_cmdline_args(), OS.get_cmdline_user_args()]
-	for group in groups:
-		var args: PackedStringArray = group
-		for i in args.size():
-			var arg := str(args[i])
-			if arg == "--scene" or arg == "--script":
-				if i + 1 < args.size() and _is_test_entry(str(args[i + 1])):
-					return true
-				continue
-			if _is_test_entry(arg):
-				return true
+	for arg in OS.get_cmdline_args():
+		if _is_test_entry(arg):
+			return true
 	return false
 
 
@@ -155,21 +155,8 @@ func _is_test_entry(arg: String) -> bool:
 		return false
 	if not (path.ends_with(".tscn") or path.ends_with(".scn") or path.ends_with(".gd")):
 		return false
+	path = ProjectSettings.localize_path(path.simplify_path())
 	if path.begins_with("res://tests/") or path.begins_with("tests/"):
 		return true
-	var marker := "/tests/"
-	var at := path.rfind(marker)
-	if at == -1:
-		return false
-	var rest := path.substr(at + marker.length())
-	return rest != "" and not rest.contains("/")
-
-
-func _isolated_save_path() -> String:
-	# Outside user://. A unique file so overlapping suite processes don't clobber
-	# each other, and a failure to mkdir never falls back to the real save.
-	var dir := OS.get_temp_dir().path_join("average_combat_tests")
-	var err := DirAccess.make_dir_recursive_absolute(dir)
-	if err != OK and err != ERR_ALREADY_EXISTS:
-		return OS.get_temp_dir().path_join("average_combat_%d.cfg" % OS.get_process_id())
-	return dir.path_join("average_combat_%d.cfg" % OS.get_process_id())
+	# An absolute entry can retain a symlink to the project, such as macOS /tmp.
+	return path.is_absolute_path() and path.get_base_dir().get_file() == "tests"

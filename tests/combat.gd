@@ -6,6 +6,8 @@ extends Node
 ## Covers round-lock projectile resolution, symmetric melee trades, and
 ## match-damage accounting. Smoke, flow, and the runner live elsewhere.
 
+const Harness := preload("res://tests/harness.gd")
+
 var _failures: Array[String] = []
 var _checks := 0
 
@@ -374,11 +376,12 @@ func _check_match_damage() -> void:
 
 
 func _report() -> void:
+	var code := 0
 	if _failures.is_empty():
 		print("COMBAT PASS: %d checks" % _checks)
-		get_tree().quit(0)
 	else:
+		code = 1
 		printerr("COMBAT FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-		get_tree().quit(1)
+	Harness.quiet_quit(self, code)

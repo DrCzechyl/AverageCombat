@@ -17,6 +17,9 @@ func _ready() -> void:
 	_ok(SaveData.is_isolated(),
 			"flow did not isolate the save (args: %s)" % " ".join(OS.get_cmdline_args()))
 	_ok(Harness.save_is_outside_user_dir(), "flow save is inside user://")
+	if not _failures.is_empty():
+		_report()
+		return
 	await _frames(3)
 
 	# --- main menu ---------------------------------------------------------
@@ -68,7 +71,7 @@ func _ready() -> void:
 	_ok(_in_scene("res://scenes/ui/main_menu.tscn"), "could not return to the main menu")
 	_ok(Harness.normal_save_stamp() == _save_stamp, "flow touched the normal save")
 
-	await _report()
+	_report()
 
 
 func _in_scene(path: String) -> bool:
@@ -112,4 +115,4 @@ func _report() -> void:
 		printerr("FLOW FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-	await Harness.quiet_quit(self, code)
+	Harness.quiet_quit(self, code)

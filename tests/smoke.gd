@@ -20,9 +20,12 @@ func _ready() -> void:
 	_ok(SaveData.is_isolated(),
 			"smoke did not isolate the save (args: %s)" % " ".join(OS.get_cmdline_args()))
 	_ok(Harness.save_is_outside_user_dir(), "smoke save is inside user://")
+	if not _failures.is_empty():
+		_report()
+		return
 	await get_tree().process_frame
 	await _run()
-	await _report()
+	_report()
 
 
 func _run() -> void:
@@ -332,4 +335,4 @@ func _report() -> void:
 		printerr("SMOKE FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-	await Harness.quiet_quit(self, code)
+	Harness.quiet_quit(self, code)

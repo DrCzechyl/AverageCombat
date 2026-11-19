@@ -19,7 +19,8 @@ gore, no mysticism, just fluorescent lighting and unresolved workplace tension.
 
 ## Match rules
 
-- Local versus is best of three (first to two). Arcade is one round per opponent. Training is a single endless round: a KO resets both fighters and does not end the session.
+- Local Versus is best of three (first to two). Arcade has one round per
+  opponent. In Training, a KO resets both fighters and play continues.
 - 99-second rounds. On time over, the higher remaining-health percentage wins;
   an exact tie is a draw and both players get a round win.
 - 900-1160 health depending on the fighter. Damage per hit is roughly 45-165.

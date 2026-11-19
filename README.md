@@ -9,15 +9,15 @@ Built with **Godot 4.7** (compatibility renderer), 1280x720, 2D pixel art.
 
 ## Play it
 
-A fresh checkout has no `.godot` import cache, so `class_name` scripts do not
-resolve and both the game and the tests fail to boot. Import once, then play:
+On a fresh checkout, import the assets and build the script class cache before
+launching.
 
 ```sh
 godot --headless --path . --import && godot --path .
 ```
 
-After that cache exists, `godot --path .` is enough. Opening the folder in the
-Godot editor and pressing F5 imports on the way in. No export templates needed.
+For later launches, run `godot --path .`. You can also open the project in the
+Godot editor and press F5.
 
 The game starts on the title screen. Everything is playable with the keyboard;
 gamepads work too.
@@ -106,35 +106,23 @@ helpers. To swap in real art, keep the sheet layout (6 columns x 12 rows of
 
 ## Tests
 
-Fresh checkout, same import as play. This is the default headless command. It
-imports, then runs every `tests/*.tscn` suite except the screenshot harness, so
-new combat and input scenes dropped in `tests/` are included:
+The test runner imports the project and runs the headless scenes in `tests/`.
+It exits nonzero on a failed test or engine error.
 
 ```sh
 ./tests/run.sh
 ```
 
-That script runs each suite the same way these direct invocations do (after the
-import cache exists):
+After importing, you can also run individual suites.
 
 ```sh
 godot --headless --path . res://tests/smoke.tscn
 godot --headless --path . res://tests/flow.tscn
 ```
 
-`godot --headless res://tests/smoke.tscn` from the project directory is the same
-suite. Smoke covers the databases, melee/projectile damage, blocking, KOs, time
-over, training reset, the AI, menus, pause, hitbox overlay, and a real
-ConfigFile save roundtrip. Flow drives the scene router from the main menu
-through character select, stage select, the arena, the pause menu, and back.
-`tests/arcade.tscn` checks one-round arcade (advance, retry, clear), first-to-two
-versus, and endless training through `Game.begin_match`. Each suite quits the
-process, 0 on success and 1 on failure. `./tests/run.sh` also fails if a suite
-still reports leaked audio at shutdown.
-
-Those invocations redirect the save in `SaveData._init`, before the file is
-loaded. They do not read or write `user://average_combat.cfg`. The roundtrip
-check writes the isolated temp file and asserts the normal path is unchanged.
+The suites cover combat, scene navigation, mode rules, and save persistence.
+Test scenes use a separate temporary save file from startup. The smoke test
+writes and reloads that file to verify persistence.
 
 Screenshots (needs a display, not `--headless`, and not part of `./tests/run.sh`):
 

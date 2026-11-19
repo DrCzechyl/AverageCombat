@@ -50,13 +50,6 @@ func play(name: String, volume_db := 0.0, pitch := 1.0, pitch_variance := 0.06) 
 	player.play()
 
 
-func any_playing() -> bool:
-	for player in _players:
-		if is_instance_valid(player) and player.playing:
-			return true
-	return false
-
-
 ## Stop pooled players but keep their streams until the audio thread mixes.
 ## Nulling or freeing a WAV in the same tick orphans AudioStreamPlaybackWAV.
 func release_for_exit() -> void:

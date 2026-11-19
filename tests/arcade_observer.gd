@@ -16,13 +16,16 @@ func _ready() -> void:
 	_ok(SaveData.is_isolated(),
 			"mode suite did not isolate the save (args: %s)" % " ".join(OS.get_cmdline_args()))
 	_ok(Harness.save_is_outside_user_dir(), "mode suite save is inside user://")
+	if not _failures.is_empty():
+		_report()
+		return
 
 	await _check_versus()
 	await _check_training()
 	await _check_arcade()
 
 	_ok(Harness.normal_save_stamp() == _save_stamp, "mode suite touched the normal save")
-	await _report()
+	_report()
 
 
 func _check_versus() -> void:
@@ -241,4 +244,4 @@ func _report() -> void:
 		printerr("MODES FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-	await Harness.quiet_quit(self, code)
+	Harness.quiet_quit(self, code)

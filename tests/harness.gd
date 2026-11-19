@@ -8,7 +8,7 @@ static func normal_save_stamp() -> String:
 	var path := ProjectSettings.globalize_path(SaveData.PATH)
 	if not FileAccess.file_exists(path):
 		return "absent"
-	return FileAccess.get_file_as_bytes(path).hex_encode()
+	return FileAccess.get_sha256(path)
 
 
 static func save_is_outside_user_dir() -> bool:

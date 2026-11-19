@@ -97,13 +97,9 @@ func stage_confirmed(new_stage: String) -> void:
 	begin_match()
 
 
-## Local versus is first to two. Arcade is one round per opponent. Training
-## uses 1 only as a fallback; the arena never closes a training match on it.
-func rounds_to_win(for_mode := "") -> int:
-	var which := mode if for_mode == "" else for_mode
-	if which == "versus":
-		return 2
-	return 1
+## Training displays one round and resets both fighters after a KO.
+func rounds_to_win(for_mode: String) -> int:
+	return 1 if for_mode == "arcade" or for_mode == "training" else 2
 
 
 func begin_match() -> void:
@@ -120,7 +116,7 @@ func begin_match() -> void:
 		"stage": stage_id,
 		"p2_is_ai": p2_is_ai,
 		"difficulty": difficulty,
-		"round_wins_needed": rounds_to_win(),
+		"round_wins_needed": rounds_to_win(mode),
 	}
 	results = {}
 	goto(ARENA)

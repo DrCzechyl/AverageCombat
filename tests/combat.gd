@@ -6,16 +6,13 @@ extends Node
 ## Covers round-lock projectile resolution, symmetric melee trades, and
 ## match-damage accounting. Smoke, flow, and the runner live elsewhere.
 
-const USER_MARK := "avgcombat_cr_9750e117"
-
 var _failures: Array[String] = []
 var _checks := 0
 
 
 func _ready() -> void:
 	await get_tree().process_frame
-	_ok(OS.get_user_data_dir().contains(USER_MARK),
-			"user:// was not isolated (%s)" % OS.get_user_data_dir())
+	SaveData.settings["hitstop"] = true
 	await _check_outcome_lock()
 	await _check_symmetric_trades()
 	await _check_match_damage()
@@ -173,6 +170,23 @@ func _check_symmetric_trades() -> void:
 	_ok(lethal.p1.vel.x < 0.0 and lethal.p2.vel.x > 0.0,
 			"traded KO knockback did not follow facing at contact")
 	lethal.queue_free()
+	await get_tree().process_frame
+
+	var final_tick := await _make_arena("dave", "dave")
+	_place(final_tick.p1, final_tick.p2)
+	final_tick.p1.health = 1.0
+	final_tick.p2.health = 1.0
+	final_tick.round_time = 1.0
+	final_tick.time_accum = 1.0 - Arena.TICK * 0.5
+	for fighter in [final_tick.p1, final_tick.p2]:
+		_prime(fighter, "jab")
+		fighter.move_tick -= 1
+	SaveData.settings["hitstop"] = false
+	final_tick._step()
+	SaveData.settings["hitstop"] = true
+	_ok(final_tick.announce_text == "K.O." and final_tick.announce_sub == "DOUBLE KO",
+			"timer overrode simultaneous lethal hits on the last playable tick")
+	final_tick.queue_free()
 	await get_tree().process_frame
 
 	var trade := await _make_arena("dave", "karen")

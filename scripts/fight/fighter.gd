@@ -175,7 +175,7 @@ func _move_clear() -> void:
 # ---------------------------------------------------------------------------
 
 
-func tick(inp: Dictionary) -> void:
+func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 	landed_flag = false
 	jumped_flag = false
 
@@ -195,7 +195,7 @@ func tick(inp: Dictionary) -> void:
 		State.WIN:
 			_tick_win()
 		State.ATTACK:
-			_tick_attack(inp)
+			_tick_attack(grant_whiff_meter)
 		State.HITSTUN, State.BLOCKSTUN:
 			_tick_stun(inp)
 		State.INTRO:
@@ -311,7 +311,7 @@ func start_move(id: String) -> void:
 	Sfx.play(str(move.get("sfx", "swing")), -7.0)
 
 
-func _tick_attack(inp: Dictionary) -> void:
+func _tick_attack(grant_whiff_meter: bool) -> void:
 	move_tick += 1
 	var total := CharacterDB.move_total(move)
 	var startup := int(move.get("startup", 1))
@@ -319,7 +319,8 @@ func _tick_attack(inp: Dictionary) -> void:
 
 	# A projectile is still in flight when these active frames end, so the
 	# whiff bonus waits until the arena sees it miss.
-	if move_tick == startup + active and not move_has_hit and not move.has("projectile"):
+	if grant_whiff_meter and move_tick == startup + active and not move_has_hit \
+			and not move.has("projectile"):
 		meter = minf(CharacterDB.METER_MAX, meter + 2.0)
 
 	if not move_lunged and move_tick >= startup and float(move.get("lunge", 0.0)) > 0.0:

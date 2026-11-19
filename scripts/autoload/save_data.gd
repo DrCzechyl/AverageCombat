@@ -46,6 +46,15 @@ func load_game() -> void:
 	# Clamp anything a hand-edited config might have broken.
 	settings["volume"] = clampf(float(settings["volume"]), 0.0, 1.0)
 	settings["difficulty"] = clampi(int(settings["difficulty"]), 1, 3)
+	for key in ["screen_shake", "hitstop", "show_hitboxes", "fullscreen"]:
+		if not (settings[key] is bool):
+			settings[key] = DEFAULT_SETTINGS[key]
+	if last_picks["p1"] not in CharacterDB.ORDER:
+		last_picks["p1"] = "dave"
+	if last_picks["p2"] not in CharacterDB.ORDER:
+		last_picks["p2"] = "karen"
+	if last_picks["stage"] not in StageDB.ORDER:
+		last_picks["stage"] = "breakroom"
 
 
 func save_game() -> void:

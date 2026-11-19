@@ -4,7 +4,7 @@ Run from the repo root:
     .venv/bin/python tools/gen_art.py
 
 Outputs:
-    assets/sprites/fighters/<id>.png   (6 x 11 grid of 64x96 frames)
+    assets/sprites/fighters/<id>.png   (6 x 12 grid of 64x96 frames)
     assets/stages/<id>.png             (1280x720)
     assets/sprites/fx/*.png
     icon.png

@@ -127,7 +127,7 @@ const SPECIALS := {
 		"knockback": 340.0, "launch": 0.0, "height": "mid",
 		"hitbox": Rect2(18, -232, 140, 90),
 		"meter_gain": 0.0, "meter_cost": 50.0,
-		"sfx": "projectile", "hit_sfx": "hit_heavy",
+		"sfx": "swing", "hit_sfx": "hit_heavy",
 		"lunge": 420.0, "armor": false, "chip": 0.12,
 	},
 }

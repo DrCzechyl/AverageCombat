@@ -21,6 +21,7 @@ func _run() -> void:
 	_check_databases()
 	await _check_melee()
 	await _check_projectile()
+	await _check_lethal_chip_and_armor()
 	await _check_training_reset()
 	await _check_time_over()
 	await _check_ai_match()
@@ -164,6 +165,23 @@ func _check_time_over() -> void:
 
 
 func _check_projectile() -> void:
+	# Close enough that the old melee box overlapped. Only the clipboard should hit.
+	var close := await _make_arena("karen", "dave")
+	close.p1.meter = CharacterDB.METER_MAX
+	close.p1.pos = Vector2(480, CharacterDB.GROUND_Y)
+	close.p2.pos = Vector2(580, CharacterDB.GROUND_Y)
+	close.p1.position = close.p1.pos
+	close.p2.position = close.p2.pos
+	close.p1.start_move("special")
+	var close_before: float = close.p2.health
+	for i in 40:
+		close._step()
+	var dropped: float = close_before - close.p2.health
+	_ok(dropped > 40.0 and dropped < 130.0,
+			"Karen's close special should hit once (health drop %.1f)" % dropped)
+	close.queue_free()
+	await get_tree().process_frame
+
 	var arena := await _make_arena("karen", "dave")
 	arena.p1.meter = CharacterDB.METER_MAX
 	arena.p1.pos = Vector2(360, CharacterDB.GROUND_Y)
@@ -180,6 +198,29 @@ func _check_projectile() -> void:
 	_ok(spawned, "Karen's special never spawned a projectile")
 	_ok(arena.p2.health < hp_before, "projectile did not damage the opponent")
 	_ok(arena.p1.meter < CharacterDB.METER_MAX, "special did not spend meter")
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_lethal_chip_and_armor() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var info: Dictionary = arena.p1.data["moves"]["heavy"].duplicate(true)
+	arena.p2.health = 5.0
+	var blocked_result: Dictionary = arena.p2.take_hit(info, true, 1, 1.0)
+	_ok(bool(blocked_result["ko"]) and arena.p2.knockout,
+			"chip failed to KO a defender at low health")
+	_ok(is_equal_approx(arena.p2.health, 0.0),
+			"chip KO left health at %.1f" % arena.p2.health)
+
+	arena.p1.start_move("jab")
+	arena.p1.move["armor"] = true
+	arena.p1.health = 10.0
+	var armor_hit := {"damage": 40.0, "hitstun": 12, "knockback": 180.0, "launch": 0.0}
+	var armor_result: Dictionary = arena.p1.take_hit(armor_hit, false, -1, 1.0)
+	_ok(bool(armor_result["ko"]) and arena.p1.knockout,
+			"armor ignored a lethal hit")
+	_ok(is_equal_approx(arena.p1.health, 0.0),
+			"armored KO left health at %.1f" % arena.p1.health)
 	arena.queue_free()
 	await get_tree().process_frame
 

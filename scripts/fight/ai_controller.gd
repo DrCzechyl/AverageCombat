@@ -40,20 +40,23 @@ func decide(me: Fighter, foe: Fighter) -> Dictionary:
 	if _block_ticks > 0:
 		_block_ticks -= 1
 
-	if _block_ticks > 0:
-		out["block"] = true
-		out["crouch"] = _crouch_block
-		return out
-
 	var dx := foe.pos.x - me.pos.x
 	var dist := absf(dx)
 	var toward := 1 if dx >= 0.0 else -1
 
-	if _tick % _interval == 0:
+	if _block_ticks <= 0 and _tick % _interval == 0:
 		_think(me, foe, dist, toward)
 
 	if _retreat_ticks > 0:
 		_retreat_ticks -= 1
+		_dir = -toward
+		_crouch = false
+
+	if _block_ticks > 0:
+		out["block"] = true
+		out["crouch"] = _crouch_block
+		out["dir"] = _dir
+		return out
 
 	out["dir"] = _dir
 	out["crouch"] = _crouch

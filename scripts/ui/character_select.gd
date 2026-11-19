@@ -56,6 +56,8 @@ func _ready() -> void:
 	_bio.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bio.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
+	if mode != "versus" and index[1] == index[0]:
+		index[1] = (index[0] + 1) % CharacterDB.ORDER.size()
 	_refresh()
 
 
@@ -138,6 +140,8 @@ func _process(_delta: float) -> void:
 			locked[0] = true
 			_dirty = true
 			Sfx.play_ui("confirm")
+		if moved and mode != "versus" and index[1] == index[0]:
+			index[1] = (index[0] + 1) % CharacterDB.ORDER.size()
 
 	if mode == "versus" and not locked[1]:
 		if Input.is_action_just_pressed("p2_left"):

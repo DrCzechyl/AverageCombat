@@ -189,6 +189,53 @@ func _step() -> void:
 		Phase.MATCH_END:
 			_step_match_end()
 
+	_separate_bodies()
+
+
+func _separate_bodies() -> void:
+	if p1.airborne or p2.airborne:
+		return
+	var min_dist := CharacterDB.BODY_HALF_WIDTH * 2.0
+	var pos1 := p1.pos
+	var pos2 := p2.pos
+	var delta := pos2.x - pos1.x
+	var dist := absf(delta)
+	if dist >= min_dist:
+		return
+	var sign := 1.0 if delta >= 0.0 else -1.0
+	var half := (min_dist - dist) * 0.5
+	pos1.x -= sign * half
+	pos2.x += sign * half
+	pos1.x = clampf(pos1.x, p1.bounds.x, p1.bounds.y)
+	pos2.x = clampf(pos2.x, p2.bounds.x, p2.bounds.y)
+	delta = pos2.x - pos1.x
+	dist = absf(delta)
+	if dist < min_dist:
+		var leftover := min_dist - dist
+		sign = 1.0 if delta >= 0.0 else -1.0
+		var room1 := (pos1.x - p1.bounds.x) if sign > 0.0 else (p1.bounds.y - pos1.x)
+		var room2 := (p2.bounds.y - pos2.x) if sign > 0.0 else (pos2.x - p2.bounds.x)
+		room1 = maxf(0.0, room1)
+		room2 = maxf(0.0, room2)
+		if room2 >= room1:
+			var push2 := minf(leftover, room2)
+			pos2.x += sign * push2
+			leftover -= push2
+			if leftover > 0.0:
+				pos1.x -= sign * minf(leftover, room1)
+		else:
+			var push1 := minf(leftover, room1)
+			pos1.x -= sign * push1
+			leftover -= push1
+			if leftover > 0.0:
+				pos2.x += sign * minf(leftover, room2)
+		pos1.x = clampf(pos1.x, p1.bounds.x, p1.bounds.y)
+		pos2.x = clampf(pos2.x, p2.bounds.x, p2.bounds.y)
+	p1.pos = pos1
+	p2.pos = pos2
+	p1.position = pos1
+	p2.position = pos2
+
 
 func _step_intro() -> void:
 	p1.tick(InputRouter.blank())
@@ -218,10 +265,14 @@ func _step_fight() -> void:
 
 	_handle_spawns()
 	_resolve_melee()
-	_update_projectiles()
+	# Hitstop freezes projectiles and the clock. The impact step already resolved.
+	var frozen := p1.hitstop > 0 or p2.hitstop > 0
+	if not frozen:
+		_update_projectiles()
 	_handle_landings()
 	_update_combos()
-	_update_timer()
+	if not frozen:
+		_update_timer()
 	_check_ko()
 
 
@@ -307,6 +358,8 @@ func _apply_attack(attacker_index: int, defender: Fighter, hit: Dictionary) -> v
 
 func _register_hit(attacker_index: int, attacker: Fighter, defender: Fighter,
 		hit: Dictionary, info: Dictionary, result: Dictionary, blocked: bool) -> void:
+	if bool(result.get("ko", false)):
+		blocked = false
 	var contact: Vector2 = hit["rect"].get_center()
 	var heavy := float(result["damage"]) >= 80.0
 	# Landing (or getting blocked) builds the attacker's meter.
@@ -338,26 +391,29 @@ func _handle_spawns() -> void:
 		var f: Fighter = p1 if i == 0 else p2
 		if f.state != Fighter.State.ATTACK or f.move.is_empty():
 			continue
-		if not f.move.has("projectile"):
+		if not f.move.has("projectile") or f.move_projectile_spawned:
 			continue
 		if f.move_tick == int(f.move.get("startup", 1)):
 			var proj := Projectile.new()
 			proj.setup(f, f.move["projectile"])
 			projectiles_root.add_child(proj)
 			projectiles.append(proj)
+			f.move_projectile_spawned = true
 
 
 func _update_projectiles() -> void:
 	for proj in projectiles.duplicate():
-		if not is_instance_valid(proj) or proj.dead:
+		if not is_instance_valid(proj):
 			projectiles.erase(proj)
-			if is_instance_valid(proj):
-				proj.queue_free()
+			continue
+		if proj.dead:
+			_retire_projectile(proj)
 			continue
 		proj.tick()
 		var defender: Fighter = p2 if proj.owner_index == 0 else p1
 		if defender.can_be_hit() and proj.hitbox().intersects(defender.hurtbox()):
-			var blocked := defender.is_guarding("mid")
+			proj.connected = true
+			var blocked := defender.is_guarding(str(proj.info.get("height", "mid")))
 			var info: Dictionary = proj.info.duplicate(true)
 			var scale := 1.0
 			if not blocked:
@@ -369,6 +425,9 @@ func _update_projectiles() -> void:
 			proj.dead = true
 			proj.queue_free()
 			projectiles.erase(proj)
+			continue
+		if proj.dead:
+			_retire_projectile(proj)
 
 
 func _update_combos() -> void:
@@ -611,3 +670,28 @@ func set_hitboxes_visible(value: bool) -> void:
 	p2.debug_boxes = value
 	p1.queue_redraw()
 	p2.queue_redraw()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("debug_hitboxes"):
+		set_hitboxes_visible(not hitboxes_visible)
+		if pause_menu != null and pause_menu._hitbox_button != null:
+			pause_menu._hitbox_button.text = "HITBOXES: %s" % ("ON" if hitboxes_visible else "OFF")
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("reset_round"):
+		if not finished:
+			if training:
+				_training_reset()
+			else:
+				_start_round()
+		get_viewport().set_input_as_handled()
+
+
+func _retire_projectile(proj: Projectile) -> void:
+	if is_instance_valid(proj) and not proj.connected:
+		var owner: Fighter = p1 if proj.owner_index == 0 else p2
+		owner.meter = minf(CharacterDB.METER_MAX, owner.meter + 2.0)
+	projectiles.erase(proj)
+	if is_instance_valid(proj):
+		proj.queue_free()

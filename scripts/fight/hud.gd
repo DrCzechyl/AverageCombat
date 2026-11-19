@@ -7,7 +7,6 @@ extends Control
 var arena: Arena = null
 
 var _trail := [0.0, 0.0]
-var _meter_flash := [0.0, 0.0]
 var _font: Font
 var _heavy: Font
 
@@ -35,10 +34,6 @@ func _process(delta: float) -> void:
 			_trail[i] = healths[i]
 		else:
 			_trail[i] = move_toward(_trail[i], healths[i], delta * 340.0)
-		var ready := arena._fighter(i).meter >= CharacterDB.METER_COST
-		_meter_flash[i] = maxf(0.0, _meter_flash[i] - delta)
-		if ready and _meter_flash[i] <= 0.0 and randf() < 0.04:
-			_meter_flash[i] = 0.6
 	queue_redraw()
 
 
@@ -52,7 +47,8 @@ func _draw() -> void:
 	if arena.training:
 		_draw_training_hints()
 	if arena.hitboxes_visible:
-		_text("HITBOXES ON  -  F1 TO HIDE", Vector2(24, 710), 14, UITheme.MUTED)
+		var notice_y := 674.0 if arena.training else 710.0
+		_text("HITBOXES ON  -  F1 TO HIDE", Vector2(24, notice_y), 14, UITheme.MUTED)
 
 
 func _draw_player_side(index: int) -> void:

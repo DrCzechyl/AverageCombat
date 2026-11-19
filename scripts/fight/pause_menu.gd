@@ -52,14 +52,25 @@ func _build() -> void:
 	var quit := UI.button(self, "QUIT TO MENU", Vector2(470, 486), Vector2(340, 54))
 	quit.pressed.connect(_quit)
 	_buttons = [_resume_button, restart, _hitbox_button, quit]
+	for i in _buttons.size():
+		var above: Button = _buttons[(i + _buttons.size() - 1) % _buttons.size()]
+		var below: Button = _buttons[(i + 1) % _buttons.size()]
+		_buttons[i].focus_neighbor_top = _buttons[i].get_path_to(above)
+		_buttons[i].focus_neighbor_bottom = _buttons[i].get_path_to(below)
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Escape is both "pause" and ui_cancel. Accept pause before ui_cancel so
+	# one press toggles instead of opening and closing on the same event.
 	if event.is_action_pressed("pause"):
 		if visible:
 			close()
 		else:
 			open()
+		accept_event()
+		return
+	if visible and event.is_action_pressed("ui_cancel"):
+		close()
 		accept_event()
 
 

@@ -82,6 +82,8 @@ func characters_confirmed(new_p1: String, new_p2: String, versus: bool) -> void:
 		p2_id = arcade["ladder"][0]
 	else:
 		p2_id = new_p2 if new_p2 != "" else CharacterDB.random_other(p1_id)
+	if not versus and p2_id == p1_id:
+		p2_id = CharacterDB.random_other(p1_id)
 	SaveData.last_picks["p1"] = p1_id
 	SaveData.last_picks["p2"] = p2_id
 	SaveData.save_game()

@@ -26,6 +26,7 @@ var _next := 0
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	for key in SOUNDS:
 		var path: String = SOUNDS[key]
 		if ResourceLoader.exists(path):

@@ -51,6 +51,7 @@ var move_tick := 0
 var move_has_hit := false
 var move_armor_used := false
 var move_lunged := false
+var move_projectile_spawned := false
 
 var knockout := false
 var landed_flag := false
@@ -127,6 +128,7 @@ func reset_for_round(at: Vector2, face_dir: int) -> void:
 	move_has_hit = false
 	move_armor_used = false
 	move_lunged = false
+	move_projectile_spawned = false
 	knockout = false
 	landed_flag = false
 	jumped_flag = false
@@ -165,6 +167,7 @@ func _move_clear() -> void:
 	move_tick = 0
 	move_has_hit = false
 	move_lunged = false
+	move_projectile_spawned = false
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +241,6 @@ func _tick_free(inp: Dictionary) -> void:
 		state = State.AIR
 		state_tick = 0
 		jumped_flag = true
-		Sfx.play("land", -18.0, 1.35)
 		return
 
 	if airborne:
@@ -296,6 +298,7 @@ func start_move(id: String) -> void:
 	move_has_hit = false
 	move_armor_used = false
 	move_lunged = false
+	move_projectile_spawned = false
 	state = State.ATTACK
 	state_tick = 0
 	blocking = false
@@ -314,8 +317,9 @@ func _tick_attack(inp: Dictionary) -> void:
 	var startup := int(move.get("startup", 1))
 	var active := int(move.get("active", 1))
 
-	if move_tick == startup + active and not move_has_hit:
-		# whiffed: a trickle of meter, so patient players still get a special
+	# A projectile is still in flight when these active frames end, so the
+	# whiff bonus waits until the arena sees it miss.
+	if move_tick == startup + active and not move_has_hit and not move.has("projectile"):
 		meter = minf(CharacterDB.METER_MAX, meter + 2.0)
 
 	if not move_lunged and move_tick >= startup and float(move.get("lunge", 0.0)) > 0.0:
@@ -400,6 +404,9 @@ func _on_land(fall_speed: float) -> void:
 func active_hit() -> Dictionary:
 	if state != State.ATTACK or move.is_empty() or move_has_hit:
 		return {}
+	# Projectile moves (Karen's clipboard) deal damage only through the projectile.
+	if move.has("projectile"):
+		return {}
 	var startup := int(move.get("startup", 1))
 	var active := int(move.get("active", 1))
 	if move_tick < startup or move_tick >= startup + active:
@@ -462,7 +469,11 @@ func take_hit(info: Dictionary, blocked: bool, dir: int, combo_scale := 1.0) -> 
 
 	if blocked:
 		var chip := damage * float(info.get("chip", 0.12))
-		health = maxf(1.0, health - chip)
+		if health - chip <= 0.0:
+			# A killing chip is a KO, not a successful block.
+			result["blocked"] = false
+			return _apply_hit_damage(info, dir, chip, result)
+		health -= chip
 		meter = minf(CharacterDB.METER_MAX, meter + damage * 0.06)
 		state = State.BLOCKSTUN
 		stun_ticks = int(info.get("blockstun", 10))
@@ -472,16 +483,22 @@ func take_hit(info: Dictionary, blocked: bool, dir: int, combo_scale := 1.0) -> 
 		result["damage"] = chip
 		return result
 
-	# Super armor (Tony's special) eats the hit but keeps going.
-	if state == State.ATTACK and bool(move.get("armor", false)) and not move_armor_used:
+	# Super armor (Tony's special) eats a non-lethal hit and keeps the move going.
+	# A hit that would empty the bar still KOs.
+	var armored := state == State.ATTACK and bool(move.get("armor", false)) and not move_armor_used
+	if armored and health - damage > 0.0:
 		move_armor_used = true
-		health = maxf(1.0, health - damage)
+		health -= damage
 		meter = minf(CharacterDB.METER_MAX, meter + damage * 0.1)
 		flash_ticks = 6
 		result["damage"] = damage
 		result["armored"] = true
 		return result
 
+	return _apply_hit_damage(info, dir, damage, result)
+
+
+func _apply_hit_damage(info: Dictionary, dir: int, damage: float, result: Dictionary) -> Dictionary:
 	health -= damage
 	combo_received += 1
 	meter = minf(CharacterDB.METER_MAX, meter + damage * 0.1)

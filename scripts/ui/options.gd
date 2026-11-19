@@ -70,7 +70,7 @@ func _cycle(title: String) -> void:
 		"MASTER VOLUME":
 			var steps := [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 			var current := int(round(float(SaveData.settings["volume"]) * 100.0))
-			var next := 100
+			var next: int = steps[0]
 			for step in steps:
 				if step > current:
 					next = step

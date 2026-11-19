@@ -12,6 +12,7 @@ var info: Dictionary = {}
 var speed := 800.0
 var life := 0.9
 var dead := false
+var connected := false
 var _spin := 0.0
 
 
@@ -19,10 +20,22 @@ func setup(owner: Fighter, data: Dictionary) -> void:
 	owner_index = owner.player_index
 	facing = owner.facing
 	info = data.duplicate(true)
+	var move := owner.move
+	if not info.has("chip"):
+		info["chip"] = move.get("chip", 0.12)
+	if not info.has("hit_sfx"):
+		info["hit_sfx"] = move.get("hit_sfx", "hit_light")
+	# 0 is a real value (Karen's special). Leaving the key off would fall
+	# through to the arena's meter default of 8.
+	if not info.has("meter_gain"):
+		info["meter_gain"] = float(move.get("meter_gain", 0.0))
+	if not info.has("height"):
+		info["height"] = move.get("height", "mid")
 	speed = float(info.get("speed", 800.0))
 	life = float(info.get("life", 0.9))
 	position = owner.pos + Vector2(facing * 66.0, -196.0)
 	z_index = 3
+	connected = false
 
 
 func tick() -> void:

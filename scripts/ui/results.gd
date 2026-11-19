@@ -65,9 +65,9 @@ func _build_winner() -> void:
 	UI.banner(self, title, 96, 78, color, UITheme.heading_font)
 	UI.banner(self, subtitle, 190, 20, UITheme.MUTED)
 
-	# Winner portrait in the center.
-	var winner_id := str(result.get("p1", "dave")) if p1_won else str(result.get("p2", "karen"))
-	if mode == "arcade" and not p1_won:
+	# Winner portrait in the center. A draw is not a player 2 victory.
+	var winner_id := str(result.get("p1", "dave")) if (p1_won or winner < 0) else str(result.get("p2", "karen"))
+	if mode == "arcade" and not p1_won and winner >= 0:
 		winner_id = str(result.get("p2", "karen"))
 	UI.portrait(self, winner_id, Rect2(560, 224, 160, 240), 0, 0)
 
@@ -80,8 +80,8 @@ func _build_stats() -> void:
 
 	var rows := [
 		["SCORE", "%d  -  %d" % [int(wins[0]), int(wins[1])]],
-		["BEST COMBO", "%d HITS" % int(combos[0])],
-		["DAMAGE DEALT", "%d" % int(damage[0])],
+		["BEST COMBO", "%d  -  %d" % [int(combos[0]), int(combos[1])]],
+		["DAMAGE DEALT", "%d  -  %d" % [int(damage[0]), int(damage[1])]],
 		["MATCH TIME", UI.fmt_seconds(seconds)],
 	]
 	UI.panel(self, Rect2(400, 470, 480, 142), UITheme.BORDER, 2)

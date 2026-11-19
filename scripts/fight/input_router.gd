@@ -18,6 +18,13 @@ func poll() -> void:
 				_press[i][action] = true
 
 
+## Drops latched attack and jump edges. The arena calls this outside FIGHT and
+## on round resets so a tap that already ended cannot fire on a later tick.
+func discard() -> void:
+	for i in 2:
+		_press[i].clear()
+
+
 func get_frame(i: int) -> Dictionary:
 	var prefix := "p%d_" % (i + 1)
 	var left := Input.is_action_pressed(prefix + "left")

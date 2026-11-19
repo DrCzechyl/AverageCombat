@@ -149,6 +149,8 @@ func _start_round() -> void:
 	_announce("ROUND %d" % round_number, 130)
 	Sfx.play("round_start", -8.0, 1.0, 0.0)
 	hud.snap_health()
+	# Round restart is not playable yet. Drop anything latched on the way in.
+	router.discard()
 
 
 # ---------------------------------------------------------------------------
@@ -159,14 +161,32 @@ func _start_round() -> void:
 func _physics_process(delta: float) -> void:
 	if finished:
 		return
-	router.poll()
+	# Edges only stick during FIGHT. Polling through the intro latches a tap
+	# that get_frame will not see until the round actually starts.
+	_sample_router()
 	_accum += delta
 	var guard := 0
 	while _accum >= TICK and guard < 8:
 		_accum -= TICK
 		guard += 1
+		var was_playable := _edges_live()
 		_step()
+		# The tick that becomes playable still gets this frame's real edges,
+		# including a press that landed on the transition itself.
+		if _edges_live() and not was_playable:
+			router.poll()
 		queue_redraw()
+
+
+func _sample_router() -> void:
+	if _edges_live():
+		router.poll()
+	else:
+		router.discard()
+
+
+func _edges_live() -> bool:
+	return phase == Phase.FIGHT
 
 
 func _step() -> void:
@@ -563,6 +583,9 @@ func _training_reset() -> void:
 	clear_projectiles_now()
 	_announce("RESET", 40)
 	hud.snap_health()
+	# Training snaps straight back to FIGHT. Clear edges from the KO first;
+	# a press on this same frame is polled after the step returns.
+	router.discard()
 
 
 func _finish_match() -> void:

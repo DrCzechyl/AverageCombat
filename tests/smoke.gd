@@ -1,20 +1,28 @@
 extends Node
 
-## Headless smoke test. Run with:
-##   godot --headless res://tests/smoke.tscn
+## Headless smoke test. Fresh checkouts need an import first (see README):
+##   godot --headless --path . --import && godot --headless --path . res://tests/smoke.tscn
+## The same scene path without the import step is what ./tests/run.sh executes.
 ##
 ## It instantiates every screen and drives the simulation directly (no input, no
 ## real time) so regressions in parsing, scene wiring or combat math show up in
 ## CI instead of at the couch.
 
+const Harness := preload("res://tests/harness.gd")
+
 var _failures: Array[String] = []
 var _checks := 0
+var _save_stamp := ""
 
 
 func _ready() -> void:
+	_save_stamp = Harness.normal_save_stamp()
+	_ok(SaveData.is_isolated(),
+			"smoke did not isolate the save (args: %s)" % " ".join(OS.get_cmdline_args()))
+	_ok(Harness.save_is_outside_user_dir(), "smoke save is inside user://")
 	await get_tree().process_frame
 	await _run()
-	_report()
+	await _report()
 
 
 func _run() -> void:
@@ -67,7 +75,7 @@ func _make_arena(p1_id: String, p2_id: String, mode := "versus") -> Arena:
 	Game.match_config = {
 		"mode": mode, "p1": p1_id, "p2": p2_id, "stage": "breakroom",
 		"p2_is_ai": false, "difficulty": 2,
-		"round_wins_needed": 1 if mode == "training" else 2,
+		"round_wins_needed": Game.rounds_to_win(mode),
 	}
 	var arena: Arena = load("res://scenes/fight/arena.tscn").instantiate()
 	arena.auto_report = false
@@ -300,21 +308,28 @@ func _check_menus() -> void:
 
 
 func _check_save_roundtrip() -> void:
+	# Same ConfigFile path the game uses, pointed at the isolated file.
 	SaveData.settings["volume"] = 0.55
 	SaveData.save_game()
 	SaveData.settings["volume"] = 0.8
 	SaveData.load_game()
 	_ok(is_equal_approx(float(SaveData.settings["volume"]), 0.55), "settings did not persist")
+	var written := ConfigFile.new()
+	_ok(written.load(SaveData.save_path) == OK, "roundtrip did not write a save file")
+	_ok(is_equal_approx(float(written.get_value("settings", "volume", -1.0)), 0.55),
+			"roundtrip file does not contain the saved volume")
+	_ok(Harness.normal_save_stamp() == _save_stamp, "roundtrip touched the normal save")
 	SaveData.settings["volume"] = 0.8
 	SaveData.save_game()
 
 
 func _report() -> void:
+	var code := 0
 	if _failures.is_empty():
 		print("SMOKE PASS: %d checks" % _checks)
-		get_tree().quit(0)
 	else:
+		code = 1
 		printerr("SMOKE FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-		get_tree().quit(1)
+	await Harness.quiet_quit(self, code)

@@ -9,11 +9,15 @@ Built with **Godot 4.7** (compatibility renderer), 1280x720, 2D pixel art.
 
 ## Play it
 
+A fresh checkout has no `.godot` import cache, so `class_name` scripts do not
+resolve and both the game and the tests fail to boot. Import once, then play:
+
 ```sh
-godot --path .
+godot --headless --path . --import && godot --path .
 ```
 
-Or open the folder in the Godot editor and press F5. No export templates needed.
+After that cache exists, `godot --path .` is enough. Opening the folder in the
+Godot editor and pressing F5 imports on the way in. No export templates needed.
 
 The game starts on the title screen. Everything is playable with the keyboard;
 gamepads work too.
@@ -39,7 +43,7 @@ down. Attacking builds meter; a full special costs 50 of 100.
 
 ## Modes
 
-- **Local Versus** - two players on one keyboard, or two pads.
+- **Local Versus** - two players on one keyboard, or two pads. First to two rounds.
 - **Arcade** - fight the other three characters in a shuffled ladder, one round
   per opponent, and get a results screen between fights.
 - **Training** - a passive dummy, infinite time, automatic reset after a KO.
@@ -64,7 +68,7 @@ scripts/autoload/  SaveData, Controls, Sfx, UITheme, Game (scene flow)
 scripts/data/      CharacterDB and StageDB - all tuning lives here
 scripts/fight/     fixed-tick simulation: fighter, arena, HUD, AI, input
 scripts/ui/        menu screens + UI kit
-tests/             headless smoke test and screenshot harness
+tests/             headless suites (smoke, flow, mode rules) and a screenshot harness
 tools/             Python generators for art and audio
 docs/              design notes and roadmap
 ```
@@ -102,29 +106,43 @@ helpers. To swap in real art, keep the sheet layout (6 columns x 12 rows of
 
 ## Tests
 
-```sh
-godot --headless res://tests/smoke.tscn
-```
-
-101 checks covering the databases, melee/projectile damage, blocking, KOs, time
-over, training reset, the AI, menus, pause, hitbox overlay, and save persistence.
-Exit code is 0 on success and 1 on failure, so it can gate CI.
-
-There is also an end-to-end flow test that drives the real scene router from the
-main menu through character select, stage select, the arena, the pause menu, and
-back:
+Fresh checkout, same import as play. This is the default headless command. It
+imports, then runs every `tests/*.tscn` suite except the screenshot harness, so
+new combat and input scenes dropped in `tests/` are included:
 
 ```sh
-godot --headless res://tests/flow.tscn
+./tests/run.sh
 ```
 
-Screenshots (needs a display, not `--headless`):
+That script runs each suite the same way these direct invocations do (after the
+import cache exists):
+
+```sh
+godot --headless --path . res://tests/smoke.tscn
+godot --headless --path . res://tests/flow.tscn
+```
+
+`godot --headless res://tests/smoke.tscn` from the project directory is the same
+suite. Smoke covers the databases, melee/projectile damage, blocking, KOs, time
+over, training reset, the AI, menus, pause, hitbox overlay, and a real
+ConfigFile save roundtrip. Flow drives the scene router from the main menu
+through character select, stage select, the arena, the pause menu, and back.
+`tests/arcade.tscn` checks one-round arcade (advance, retry, clear), first-to-two
+versus, and endless training through `Game.begin_match`. Each suite quits the
+process, 0 on success and 1 on failure. `./tests/run.sh` also fails if a suite
+still reports leaked audio at shutdown.
+
+Those invocations redirect the save in `SaveData._init`, before the file is
+loaded. They do not read or write `user://average_combat.cfg`. The roundtrip
+check writes the isolated temp file and asserts the normal path is unchanged.
+
+Screenshots (needs a display, not `--headless`, and not part of `./tests/run.sh`):
 
 ```sh
 godot --resolution 1280x720 res://tests/screens.tscn
 ```
 
-Writes to `screenshots/`.
+Writes to `screenshots/`. Running it directly is also isolated from the normal save.
 
 ## Screens
 

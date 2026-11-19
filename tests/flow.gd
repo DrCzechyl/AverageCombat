@@ -2,8 +2,8 @@ extends Node
 
 ## Entry scene for the end-to-end flow test. It spawns a controller that lives
 ## under the scene tree root (so it survives change_scene_to_file) and then
-## idles. Run with:
-##   godot --headless res://tests/flow.tscn
+## idles. Fresh checkouts need an import first (see README). Then:
+##   godot --headless --path . res://tests/flow.tscn
 
 func _ready() -> void:
 	var observer := Node.new()

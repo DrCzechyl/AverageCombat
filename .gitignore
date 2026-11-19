@@ -1,6 +1,8 @@
 # Godot
 .godot/
 *.translation
+# Local sandbox (custom user://). Never commit.
+override.cfg
 
 # Python tooling
 .venv/

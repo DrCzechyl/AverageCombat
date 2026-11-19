@@ -23,6 +23,7 @@ const SILENT := ["swing"]  # can be toggled off in options later
 var _players: Array[AudioStreamPlayer] = []
 var _streams: Dictionary = {}
 var _next := 0
+var _released := false
 
 
 func _ready() -> void:
@@ -39,7 +40,7 @@ func _ready() -> void:
 
 
 func play(name: String, volume_db := 0.0, pitch := 1.0, pitch_variance := 0.06) -> void:
-	if not _streams.has(name):
+	if _released or _players.is_empty() or not _streams.has(name):
 		return
 	var player := _players[_next]
 	_next = (_next + 1) % _players.size()
@@ -47,6 +48,44 @@ func play(name: String, volume_db := 0.0, pitch := 1.0, pitch_variance := 0.06) 
 	player.volume_db = volume_db
 	player.pitch_scale = maxf(0.05, pitch + randf_range(-pitch_variance, pitch_variance))
 	player.play()
+
+
+func any_playing() -> bool:
+	for player in _players:
+		if is_instance_valid(player) and player.playing:
+			return true
+	return false
+
+
+## Stop pooled players but keep their streams until the audio thread mixes.
+## Nulling or freeing a WAV in the same tick orphans AudioStreamPlaybackWAV.
+func release_for_exit() -> void:
+	if _released:
+		return
+	_released = true
+	for player in _players:
+		if is_instance_valid(player):
+			player.stop()
+
+
+func finish_release() -> void:
+	for player in _players:
+		if not is_instance_valid(player):
+			continue
+		player.stop()
+		player.stream = null
+		player.free()
+	_players.clear()
+	_streams.clear()
+
+
+func _exit_tree() -> void:
+	if _released:
+		return
+	for player in _players:
+		if is_instance_valid(player):
+			player.stop()
+	_streams.clear()
 
 
 func play_ui(name: String) -> void:

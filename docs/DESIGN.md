@@ -19,7 +19,7 @@ gore, no mysticism, just fluorescent lighting and unresolved workplace tension.
 
 ## Match rules
 
-- Best of three rounds (first to two). Training is a single endless round.
+- Local versus is best of three (first to two). Arcade is one round per opponent. Training is a single endless round: a KO resets both fighters and does not end the session.
 - 99-second rounds. On time over, the higher remaining-health percentage wins;
   an exact tie is a draw and both players get a round win.
 - 900-1160 health depending on the fighter. Damage per hit is roughly 45-165.
@@ -108,3 +108,5 @@ separate game-over scene.
 `user://average_combat.cfg` stores settings, lifetime stats (matches, wins, best
 combo, arcade clears, total damage), and the last character/stage picks. It is a
 plain `ConfigFile`, so it can be hand-edited or reset by deleting the file.
+Headless suites and other `res://tests` scenes write a temp file instead, so a
+test run does not load or replace that save.

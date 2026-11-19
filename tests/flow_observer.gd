@@ -4,12 +4,19 @@ extends Node
 ## -> arena, then pauses and returns to the menu. Lives under the root so it is
 ## not freed by the scene changes it causes.
 
+const Harness := preload("res://tests/harness.gd")
+
 var _failures: Array[String] = []
 var _checks := 0
+var _save_stamp := ""
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_save_stamp = Harness.normal_save_stamp()
+	_ok(SaveData.is_isolated(),
+			"flow did not isolate the save (args: %s)" % " ".join(OS.get_cmdline_args()))
+	_ok(Harness.save_is_outside_user_dir(), "flow save is inside user://")
 	await _frames(3)
 
 	# --- main menu ---------------------------------------------------------
@@ -59,8 +66,9 @@ func _ready() -> void:
 	Game.go_main_menu()
 	await _frames(4)
 	_ok(_in_scene("res://scenes/ui/main_menu.tscn"), "could not return to the main menu")
+	_ok(Harness.normal_save_stamp() == _save_stamp, "flow touched the normal save")
 
-	_report()
+	await _report()
 
 
 func _in_scene(path: String) -> bool:
@@ -96,11 +104,12 @@ func _ok(condition: bool, message: String) -> void:
 
 
 func _report() -> void:
+	var code := 0
 	if _failures.is_empty():
 		print("FLOW PASS: %d checks" % _checks)
-		get_tree().quit(0)
 	else:
+		code = 1
 		printerr("FLOW FAIL: %d of %d checks failed" % [_failures.size(), _checks])
 		for failure in _failures:
 			printerr("  - ", failure)
-		get_tree().quit(1)
+	await Harness.quiet_quit(self, code)

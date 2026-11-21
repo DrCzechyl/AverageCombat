@@ -7,7 +7,7 @@ extends RefCounted
 ## This is the seam where online play will eventually plug in: replace
 ## get_frame() with frames received from the netcode and nothing else changes.
 
-const EDGE_ACTIONS := ["up", "light", "heavy", "special"]
+const EDGE_ACTIONS := ["up", "light", "heavy", "special", "throw"]
 
 var _press: Array = [{}, {}]
 var _ignore_through: Array = [{}, {}]
@@ -35,6 +35,18 @@ func consume_menu_press(event: InputEvent) -> void:
 				_ignore_through[i][action] = through
 
 
+func consume_pressed_edges() -> void:
+	# A GUI button (e.g. RESUME via pad A) emits `pressed` on release, after
+	# Input.is_action_pressed is already false, while Godot still reports
+	# is_action_just_pressed on the next physics tick. Suppress combat edges
+	# across the unpause boundary so menu taps never leak into the fight.
+	var through := Engine.get_physics_frames() + 1
+	for i in 2:
+		for action in EDGE_ACTIONS:
+			_press[i].erase(action)
+			_ignore_through[i][action] = through
+
+
 ## Drops latched attack and jump edges. The arena calls this outside FIGHT and
 ## on round resets so a tap that already ended cannot fire on a later tick.
 func discard() -> void:
@@ -58,6 +70,7 @@ func get_frame(i: int) -> Dictionary:
 		"light": _take(i, "light"),
 		"heavy": _take(i, "heavy"),
 		"special": _take(i, "special"),
+		"throw": _take(i, "throw"),
 		"block": Input.is_action_pressed(prefix + "block"),
 	}
 	return frame
@@ -73,5 +86,5 @@ func _take(i: int, action: String) -> bool:
 static func blank() -> Dictionary:
 	return {
 		"dir": 0, "jump": false, "crouch": false,
-		"light": false, "heavy": false, "special": false, "block": false,
+		"light": false, "heavy": false, "special": false, "throw": false, "block": false,
 	}

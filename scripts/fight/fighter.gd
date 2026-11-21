@@ -7,10 +7,10 @@ extends Node2D
 ##
 ## input = {
 ##   "dir": -1 | 0 | 1, "jump": bool, "crouch": bool,
-##   "light": bool, "heavy": bool, "special": bool, "block": bool
+##   "light": bool, "heavy": bool, "special": bool, "throw": bool, "block": bool
 ## }
 
-enum State { INTRO, IDLE, WALK, CROUCH, AIR, ATTACK, HITSTUN, BLOCKSTUN, KO, WIN }
+enum State { INTRO, IDLE, WALK, CROUCH, AIR, ATTACK, HITSTUN, BLOCKSTUN, KNOCKDOWN, THROW, GRABBED, KO, WIN }
 
 const TICK := 1.0 / 60.0
 const GRAVITY := 2600.0
@@ -19,13 +19,36 @@ const WALK_ACCEL := 2300.0
 const ATTACK_FRICTION := 3000.0
 const AIR_CONTROL := 1200.0
 const INPUT_BUFFER := 8
-const BASE_SPRITE_SCALE := 3.0
+const BASE_SPRITE_SCALE := 1.0
+
+const MIRROR_SHADER_CODE := """
+shader_type canvas_item;
+uniform vec4 alt_tint : source_color = vec4(0.45, 0.65, 0.86, 1.0);
+varying vec4 v_modulate;
+void vertex() {
+	v_modulate = COLOR;
+}
+void fragment() {
+	vec4 col = texture(TEXTURE, UV);
+	if (col.a > 0.01) {
+		float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+		float sat = max(col.r, max(col.g, col.b)) - min(col.r, min(col.g, col.b));
+		bool is_outline = luma < 0.18;
+		bool is_skin = col.r > 0.55 && col.g > 0.35 && col.b > 0.2 && col.r > col.g && col.g > col.b && sat < 0.45;
+		if (!is_outline && !is_skin) {
+			col.rgb = mix(col.rgb, col.rgb * alt_tint.rgb, 0.45);
+		}
+	}
+	COLOR = col * v_modulate;
+}
+"""
 
 @onready var sprite: AnimatedSprite2D = $Sprite
 @onready var shadow: Sprite2D = $Shadow
 
 var char_id := "dave"
 var data: Dictionary = {}
+var spec: FighterSpec
 var player_index := 0
 var opponent: Fighter
 
@@ -46,6 +69,7 @@ var hitstop := 0
 var stun_ticks := 0
 var invuln := 0
 var flash_ticks := 0
+var armor_flash_ticks := 0
 var debug_boxes := false
 
 var move: Dictionary = {}
@@ -60,7 +84,19 @@ var knockout := false
 var landed_flag := false
 var jumped_flag := false
 var combo_received := 0
+var pending_knockdown := false
 
+var events: Array[Dictionary] = []
+var throw_tech_ticks := 0
+var throw_connected := false
+var throw_completed_flag := false
+var throw_damage_dealt := 0.0
+var throw_raw_damage := 0.0
+var teched_flag := false
+var mirror_palette := false
+var _mirror_material: ShaderMaterial
+
+var _throw_released := false
 var _anim_name := ""
 var _buf_action := ""
 var _buf_ticks := 0
@@ -74,12 +110,48 @@ var _kick_span := 0
 func setup(id: String, index: int) -> void:
 	char_id = id
 	data = CharacterDB.get_character(id)
+	spec = CharacterDB.get_fighter_spec(id)
 	player_index = index
 	health = float(data["build"]["health"])
 	meter = 0.0
 	_build_frames()
 	reset_visuals()
+	if mirror_palette:
+		set_mirror_palette(true)
 	shadow.texture = load("res://assets/sprites/fx/shadow.png")
+
+
+func _emit_sfx(sfx_name: String, volume_db := 0.0, pitch := 1.0, pitch_variance := 0.06) -> void:
+	events.append({
+		"type": "sfx",
+		"name": sfx_name,
+		"db": volume_db,
+		"pitch": pitch,
+		"var": pitch_variance,
+	})
+
+
+func drain_events() -> Array[Dictionary]:
+	var out: Array[Dictionary] = events.duplicate()
+	events.clear()
+	return out
+
+
+func set_mirror_palette(enabled: bool) -> void:
+	mirror_palette = enabled
+	if sprite == null:
+		return
+	if not enabled:
+		sprite.material = null
+		return
+	if _mirror_material == null:
+		var shader := Shader.new()
+		shader.code = MIRROR_SHADER_CODE
+		_mirror_material = ShaderMaterial.new()
+		_mirror_material.shader = shader
+	var tint: Color = spec.alt_tint if spec != null else Color(data.get("alt_tint", Color(0.45, 0.65, 0.86)))
+	_mirror_material.set_shader_parameter("alt_tint", tint)
+	sprite.material = _mirror_material
 
 
 func _build_frames() -> void:
@@ -107,7 +179,10 @@ func _ready() -> void:
 		# setup() normally runs right after add_child(); this is a safety net for
 		# the editor preview / tests that put a Fighter in the scene directly.
 		data = CharacterDB.get_character(char_id)
+		spec = CharacterDB.get_fighter_spec(char_id)
 		_build_frames()
+	elif spec == null:
+		spec = CharacterDB.get_fighter_spec(char_id)
 	position = pos
 
 
@@ -130,6 +205,7 @@ func reset_for_round(at: Vector2, face_dir: int) -> void:
 	stun_ticks = 0
 	invuln = 0
 	flash_ticks = 0
+	armor_flash_ticks = 0
 	move = {}
 	move_name = ""
 	move_tick = 0
@@ -141,6 +217,15 @@ func reset_for_round(at: Vector2, face_dir: int) -> void:
 	landed_flag = false
 	jumped_flag = false
 	combo_received = 0
+	pending_knockdown = false
+	throw_tech_ticks = 0
+	throw_connected = false
+	_throw_released = false
+	throw_completed_flag = false
+	throw_damage_dealt = 0.0
+	throw_raw_damage = 0.0
+	teched_flag = false
+	events.clear()
 	state = State.INTRO
 	state_tick = 0
 	_anim_name = ""
@@ -157,11 +242,6 @@ func reset_for_match() -> void:
 	meter = 0.0
 
 
-func heal_full() -> void:
-	health = float(data["build"]["health"])
-	knockout = false
-
-
 func celebrate() -> void:
 	if state == State.KO:
 		return
@@ -175,8 +255,12 @@ func _move_clear() -> void:
 	move_name = ""
 	move_tick = 0
 	move_has_hit = false
+	move_armor_used = false
 	move_lunged = false
 	move_projectile_spawned = false
+	throw_connected = false
+	_throw_released = false
+	throw_tech_ticks = 0
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +271,10 @@ func _move_clear() -> void:
 func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 	landed_flag = false
 	jumped_flag = false
+	throw_completed_flag = false
+	throw_damage_dealt = 0.0
+	throw_raw_damage = 0.0
+	teched_flag = false
 	_buf_latched = false
 	_track_buffer(inp)
 
@@ -196,6 +284,8 @@ func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 		return
 	if flash_ticks > 0:
 		flash_ticks -= 1
+	if armor_flash_ticks > 0:
+		armor_flash_ticks -= 1
 	if invuln > 0:
 		invuln -= 1
 	state_tick += 1
@@ -206,7 +296,13 @@ func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 		State.WIN:
 			_tick_win()
 		State.ATTACK:
-			_tick_attack(grant_whiff_meter)
+			_tick_attack(inp, grant_whiff_meter)
+		State.THROW:
+			_tick_throw(inp)
+		State.GRABBED:
+			_tick_grabbed(inp)
+		State.KNOCKDOWN:
+			_tick_knockdown(inp)
 		State.HITSTUN, State.BLOCKSTUN:
 			_tick_stun(inp)
 		State.INTRO:
@@ -214,7 +310,7 @@ func tick(inp: Dictionary, grant_whiff_meter := true) -> void:
 		_:
 			_tick_free(inp)
 
-	_integrate()
+	_integrate(inp)
 	# Recovery can end on the same tick a buffered press is still valid. Fire it
 	# before the window counts down, and don't spend the window during hitstop.
 	if state == State.IDLE or state == State.WALK or state == State.CROUCH or state == State.AIR:
@@ -234,6 +330,11 @@ func _tick_intro() -> void:
 		state_tick = 0
 
 
+func _wants_throw(inp: Dictionary) -> bool:
+	return bool(inp.get("throw", false)) \
+			or (bool(inp.get("light", false)) and bool(inp.get("block", false)))
+
+
 func _tick_free(inp: Dictionary) -> void:
 	var dir := int(inp.get("dir", 0))
 	if opponent != null and not airborne:
@@ -246,6 +347,10 @@ func _tick_free(inp: Dictionary) -> void:
 	blocking = (bool(inp.get("block", false)) or holding_back) and not airborne
 
 	if _try_buffered(inp):
+		return
+
+	if not airborne and _wants_throw(inp):
+		start_throw()
 		return
 
 	# Attacks take priority over movement.
@@ -306,13 +411,20 @@ func _begin_jump() -> void:
 
 
 func _track_buffer(inp: Dictionary) -> void:
-	if state != State.ATTACK and state != State.HITSTUN and state != State.BLOCKSTUN:
+	var can_buffer := state == State.ATTACK or state == State.HITSTUN or state == State.BLOCKSTUN \
+			or state == State.THROW or state == State.KNOCKDOWN
+	if not can_buffer and hitstop > 0:
+		can_buffer = state == State.IDLE or state == State.WALK \
+				or state == State.CROUCH or state == State.AIR
+	if not can_buffer:
 		return
 	var action := ""
 	if bool(inp.get("special", false)):
 		action = "special"
 	elif bool(inp.get("heavy", false)):
 		action = "heavy"
+	elif _wants_throw(inp):
+		action = "throw"
 	elif bool(inp.get("light", false)):
 		action = "light"
 	elif bool(inp.get("jump", false)):
@@ -326,7 +438,8 @@ func _track_buffer(inp: Dictionary) -> void:
 func _decay_buffer() -> void:
 	if _buf_latched or hitstop > 0:
 		return
-	if state != State.ATTACK and state != State.HITSTUN and state != State.BLOCKSTUN:
+	if state != State.ATTACK and state != State.HITSTUN and state != State.BLOCKSTUN \
+			and state != State.THROW and state != State.KNOCKDOWN:
 		return
 	if _buf_ticks <= 0:
 		return
@@ -350,6 +463,11 @@ func _try_buffered(inp: Dictionary) -> bool:
 			return false
 		_begin_jump()
 		return true
+	if action == "throw":
+		if airborne:
+			return false
+		start_throw()
+		return true
 	# Recovery and stun leave `crouching` where the previous move put it, so a
 	# down-held light was coming out as a jab. Grounded normals take the stance
 	# held on the tick the buffer is spent. Air attacks ignore that hold.
@@ -362,15 +480,53 @@ func _try_buffered(inp: Dictionary) -> bool:
 	})
 
 
+func _try_cancel(inp: Dictionary) -> bool:
+	if state != State.ATTACK or not move_has_hit or move.is_empty() or airborne:
+		return false
+	var cancels: Array = move.get("cancel_into", [])
+	if cancels.is_empty():
+		return false
+	var action := ""
+	if _buf_ticks > 0 and _buf_action != "":
+		action = _buf_action
+	elif bool(inp.get("special", false)):
+		action = "special"
+	elif bool(inp.get("heavy", false)):
+		action = "heavy"
+	elif bool(inp.get("light", false)):
+		action = "light"
+
+	var target := ""
+	var want_crouch := bool(inp.get("crouch", false))
+	match action:
+		"special":
+			if "special" in cancels and meter >= CharacterDB.METER_COST:
+				target = "special"
+		"heavy":
+			var heavy_id := "sweep" if want_crouch else "heavy"
+			if heavy_id in cancels:
+				target = heavy_id
+		"light":
+			var light_id := "low" if want_crouch else "jab"
+			if light_id in cancels:
+				target = light_id
+
+	if target == "":
+		return false
+	crouching = (target == "low" or target == "sweep")
+	start_move(target)
+	return true
+
+
 func _try_attack(inp: Dictionary) -> bool:
-	if bool(inp.get("special", false)) and meter >= CharacterDB.METER_COST:
-		start_move("special")
-		return true
 	if airborne:
 		if bool(inp.get("heavy", false)) or bool(inp.get("light", false)):
 			start_move("air")
 			return true
 		return false
+	if bool(inp.get("special", false)) and meter >= CharacterDB.METER_COST:
+		start_move("special")
+		return true
 	if bool(inp.get("heavy", false)):
 		start_move("sweep" if crouching else "heavy")
 		return true
@@ -393,6 +549,8 @@ func start_move(id: String) -> void:
 	move_projectile_spawned = false
 	state = State.ATTACK
 	state_tick = 0
+	if id != "low" and id != "sweep":
+		crouching = false
 	blocking = false
 	walking = false
 	if not airborne and opponent != null:
@@ -400,11 +558,140 @@ func start_move(id: String) -> void:
 	var cost := float(move.get("meter_cost", 0.0))
 	if cost > 0.0:
 		meter = maxf(0.0, meter - cost)
-	Sfx.play(str(move.get("sfx", "swing")), -7.0)
+	_emit_sfx(str(move.get("sfx", "swing")), -7.0)
 
 
-func _tick_attack(grant_whiff_meter: bool) -> void:
+func start_throw() -> void:
+	_clear_buffer()
+	_move_clear()
+	state = State.THROW
+	move_name = "throw"
+	move_tick = 0
+	state_tick = 0
+	crouching = false
+	blocking = false
+	walking = false
+	throw_connected = false
+	_throw_released = false
+	throw_tech_ticks = 0
+	if opponent != null:
+		facing = 1 if opponent.pos.x >= pos.x else -1
+	_emit_sfx("swing", -7.0)
+
+
+func _tick_throw(inp: Dictionary) -> void:
 	move_tick += 1
+	vel.x = move_toward(vel.x, 0, ATTACK_FRICTION * TICK)
+
+	if move_tick == CharacterDB.THROW_STARTUP and not throw_connected and not _throw_released:
+		var throw_range: float = spec.throw_range if spec != null else CharacterDB.THROW_RANGE
+		if opponent != null and not opponent.airborne and opponent.can_be_hit() \
+				and opponent.state != State.HITSTUN and opponent.state != State.BLOCKSTUN \
+				and opponent.state != State.KNOCKDOWN and opponent.state != State.GRABBED \
+				and opponent.state != State.KO \
+				and absf(opponent.pos.x - pos.x) <= throw_range:
+			throw_connected = true
+			throw_tech_ticks = CharacterDB.THROW_TECH_WINDOW
+			opponent.pos.x = clampf(pos.x + facing * 74.0, opponent.bounds.x, opponent.bounds.y)
+			opponent.position = opponent.pos
+			opponent.vel = Vector2.ZERO
+			opponent.facing = -facing
+			opponent._clear_buffer()
+			opponent._move_clear()
+			opponent.crouching = false
+			opponent.blocking = false
+			opponent.state = State.GRABBED
+			opponent.state_tick = 0
+			opponent.throw_tech_ticks = CharacterDB.THROW_TECH_WINDOW
+			return
+
+	if throw_connected:
+		if opponent == null or opponent.state != State.GRABBED:
+			throw_connected = false
+			return
+		throw_tech_ticks -= 1
+		if throw_tech_ticks <= 0:
+			var dmg: float = spec.throw_damage if spec != null else CharacterDB.THROW_DAMAGE
+			var hp_before := opponent.health
+			opponent.throw_tech_ticks = 0
+			opponent.take_hit({
+				"damage": dmg,
+				"hitstun": 20,
+				"knockback": 340.0,
+				"launch": 460.0,
+				"knockdown": true,
+				"height": "throw",
+			}, false, facing, 1.0)
+			throw_raw_damage = dmg
+			throw_damage_dealt = maxf(0.0, hp_before - opponent.health)
+			throw_completed_flag = true
+			meter = minf(CharacterDB.METER_MAX, meter + 10.0)
+			_emit_sfx("throw", -3.0)
+			throw_connected = false
+			_throw_released = true
+		return
+
+	if _throw_released:
+		if move_tick >= CharacterDB.THROW_STARTUP + CharacterDB.THROW_TECH_WINDOW + 12:
+			_move_clear()
+			_sync_grounded_stance(inp)
+		return
+
+	if move_tick >= CharacterDB.THROW_STARTUP + CharacterDB.THROW_RECOVERY:
+		_move_clear()
+		_sync_grounded_stance(inp)
+
+
+func _tick_grabbed(inp: Dictionary) -> void:
+	vel = Vector2.ZERO
+	if throw_tech_ticks > 0:
+		throw_tech_ticks -= 1
+		if _wants_throw(inp) and opponent != null and opponent.state == State.THROW and opponent.throw_connected:
+			vel.x = -facing * 260.0
+			opponent.vel.x = -opponent.facing * 260.0
+			invuln = 6
+			opponent.invuln = 6
+			throw_tech_ticks = 0
+			opponent._clear_buffer()
+			opponent._move_clear()
+			opponent.state = State.IDLE
+			opponent.state_tick = 0
+			_clear_buffer()
+			state = State.IDLE
+			state_tick = 0
+			teched_flag = true
+			_emit_sfx("tech", -4.0)
+			return
+	if opponent == null or (opponent.state != State.THROW and state == State.GRABBED):
+		throw_tech_ticks = 0
+		_sync_grounded_stance(inp)
+
+
+func _tick_knockdown(inp: Dictionary) -> void:
+	vel.x = move_toward(vel.x, 0, GROUND_FRICTION * TICK)
+	if stun_ticks > 0:
+		stun_ticks -= 1
+	if stun_ticks <= 0 and not airborne:
+		_sync_grounded_stance(inp)
+		invuln = CharacterDB.WAKEUP_INVULN
+
+
+func _sync_grounded_stance(inp: Dictionary) -> void:
+	if opponent != null:
+		facing = 1 if opponent.pos.x >= pos.x else -1
+	crouching = bool(inp.get("crouch", false))
+	var dir := int(inp.get("dir", 0))
+	var holding_back := dir != 0 and dir == -facing
+	blocking = bool(inp.get("block", false)) or holding_back
+	walking = false
+	state = State.CROUCH if crouching else State.IDLE
+	state_tick = 0
+
+
+func _tick_attack(inp: Dictionary, grant_whiff_meter: bool) -> void:
+	move_tick += 1
+	if move_has_hit and _try_cancel(inp):
+		return
 	var total := CharacterDB.move_total(move)
 	var startup := int(move.get("startup", 1))
 	var active := int(move.get("active", 1))
@@ -420,31 +707,31 @@ func _tick_attack(grant_whiff_meter: bool) -> void:
 		var dist := float(move["lunge"])
 		vel.x = facing * sqrt(2.0 * ATTACK_FRICTION * dist)
 
-	vel.x = move_toward(vel.x, 0, ATTACK_FRICTION * TICK)
-	if airborne:
-		# Air attacks keep their drift; gravity still applies.
-		pass
+	if not airborne:
+		vel.x = move_toward(vel.x, 0, ATTACK_FRICTION * TICK)
+	# Air attacks keep their drift; gravity still applies.
 
 	if move_tick >= total:
 		_move_clear()
 		if airborne:
 			state = State.AIR
+			state_tick = 0
 		else:
-			state = State.IDLE
-		state_tick = 0
+			_sync_grounded_stance(inp)
 
 
 func _tick_stun(inp: Dictionary) -> void:
+	if state == State.BLOCKSTUN and not airborne:
+		crouching = bool(inp.get("crouch", false))
 	if stun_ticks > 0:
 		stun_ticks -= 1
 	vel.x = move_toward(vel.x, 0, GROUND_FRICTION * TICK)
 	if stun_ticks <= 0 and not airborne:
 		var was_hit := state == State.HITSTUN
-		state = State.CROUCH if crouching else State.IDLE
-		state_tick = 0
-		blocking = false
+		_sync_grounded_stance(inp)
 		if was_hit:
 			combo_received = 0
+			pending_knockdown = false
 
 
 func _tick_ko() -> void:
@@ -457,7 +744,7 @@ func _tick_win() -> void:
 		facing = 1 if opponent.pos.x >= pos.x else -1
 
 
-func _integrate() -> void:
+func _integrate(inp: Dictionary) -> void:
 	vel.y += GRAVITY * TICK
 	pos += vel * TICK
 	if pos.y >= CharacterDB.GROUND_Y:
@@ -465,26 +752,31 @@ func _integrate() -> void:
 		if airborne and vel.y > 0.0:
 			airborne = false
 			landed_flag = true
-			_on_land(vel.y)
+			_on_land(vel.y, inp)
 		vel.y = 0.0
 	pos.x = clampf(pos.x, bounds.x, bounds.y)
 	position = pos
 
 
-func _on_land(fall_speed: float) -> void:
+func _on_land(fall_speed: float, inp: Dictionary) -> void:
 	if fall_speed > 420.0:
-		Sfx.play("land", -12.0, 0.85, 0.1)
+		_emit_sfx("land", -12.0, 0.85, 0.1)
 	match state:
 		State.AIR:
-			state = State.IDLE
-			state_tick = 0
+			_sync_grounded_stance(inp)
 		State.ATTACK:
 			if move_name == "air":
 				_move_clear()
-				state = State.IDLE
-				state_tick = 0
+				_sync_grounded_stance(inp)
 		State.HITSTUN:
-			stun_ticks = maxi(stun_ticks, 16)
+			if pending_knockdown:
+				pending_knockdown = false
+				state = State.KNOCKDOWN
+				state_tick = 0
+				stun_ticks = CharacterDB.KNOCKDOWN_TICKS
+				combo_received = 0
+			else:
+				stun_ticks = maxi(stun_ticks, 16)
 		State.KO:
 			pass
 
@@ -524,7 +816,7 @@ func move_hitbox(move_data: Dictionary, face_dir: int) -> Rect2:
 
 
 func hurtbox() -> Rect2:
-	if state == State.KO:
+	if state == State.KO or state == State.KNOCKDOWN:
 		return Rect2(pos.x - 48.0, pos.y - 52.0, 96.0, 52.0)
 	var r: Rect2
 	if airborne:
@@ -549,7 +841,7 @@ func is_guarding(height: String) -> bool:
 
 
 func can_be_hit() -> bool:
-	return state != State.KO and invuln <= 0 and not knockout
+	return state != State.KO and state != State.KNOCKDOWN and state != State.GRABBED and invuln <= 0 and not knockout
 
 
 func is_attacking() -> bool:
@@ -589,6 +881,8 @@ func take_hit(info: Dictionary, blocked: bool, dir: int, combo_scale := 1.0) -> 
 		health -= damage
 		meter = minf(CharacterDB.METER_MAX, meter + damage * 0.1)
 		flash_ticks = 6
+		armor_flash_ticks = 8
+		_emit_sfx("armor", -3.0)
 		result["damage"] = damage
 		result["armored"] = true
 		return result
@@ -600,30 +894,35 @@ func _apply_hit_damage(info: Dictionary, dir: int, damage: float, result: Dictio
 	health -= damage
 	combo_received += 1
 	meter = minf(CharacterDB.METER_MAX, meter + damage * 0.1)
+	_move_clear()
 	state = State.HITSTUN
 	stun_ticks = int(info.get("hitstun", 12))
 	state_tick = 0
 	flash_ticks = 6
 	crouching = false
 	blocking = false
+	if bool(info.get("knockdown", false)):
+		pending_knockdown = true
 	var weight := maxf(0.6, float(data["build"]["weight"]))
 	vel.x = dir * float(info.get("knockback", 0.0)) / weight
 	var launch := float(info.get("launch", 0.0))
 	if launch > 0.0:
 		vel.y = -launch
 		airborne = true
+	elif airborne:
+		vel.y = -280.0
 	result["damage"] = damage
 	if health <= 0.0:
 		health = 0.0
 		knockout = true
+		pending_knockdown = false
 		state = State.KO
 		state_tick = 0
 		stun_ticks = 0
-		_move_clear()
 		airborne = true
 		vel.y = -430.0
 		vel.x = dir * 320.0 / weight
-		Sfx.play("ko", -2.0)
+		_emit_sfx("ko", -2.0)
 		result["ko"] = true
 	return result
 
@@ -687,8 +986,12 @@ func _update_visuals(frozen := false) -> void:
 	sprite.flip_h = facing < 0
 	_anchor_shadow(pos.y)
 
-	if flash_ticks > 0:
+	if armor_flash_ticks > 0:
+		sprite.modulate = Color(2.0, 1.65, 0.7)
+	elif flash_ticks > 0:
 		sprite.modulate = Color(1.9, 1.9, 1.9)
+	elif invuln > 0:
+		sprite.modulate = Color(1.0, 1.0, 1.0, 0.65 if (invuln % 4 < 2) else 1.0)
 	else:
 		sprite.modulate = Color.WHITE
 
@@ -754,41 +1057,49 @@ func _draw() -> void:
 func _update_anim() -> void:
 	var anim := "idle"
 	var manual := false
+	var manual_frame := 0
 
 	match state:
 		State.KO:
 			anim = "ko"
+		State.KNOCKDOWN:
+			anim = "ko"
+			manual = true
+			manual_frame = 1
+		State.THROW:
+			anim = "throw"
+			manual = true
+			manual_frame = _throw_pose_frame()
+		State.GRABBED:
+			anim = "hurt"
 		State.ATTACK:
 			if not move.is_empty():
 				anim = str(move.get("anim", "light"))
 				manual = true
+				manual_frame = _move_pose_frame(move, move_tick)
 			else:
 				anim = "idle"
 		State.HITSTUN:
 			anim = "hurt"
 		State.BLOCKSTUN:
-			anim = "block"
+			anim = "crouch_block" if crouching else "block"
 		State.WIN:
 			anim = "win"
 		State.AIR:
 			anim = "jump"
 			manual = true
+			manual_frame = 0 if vel.y < 0.0 else 1
 		State.CROUCH:
-			anim = "crouch"
+			anim = "crouch_block" if blocking and _threatened() else "crouch"
 		State.WALK:
 			anim = "block" if blocking and _threatened() else "walk"
 		_:
 			anim = "block" if blocking and _threatened() else "idle"
 
 	if manual:
-		var frame := 0
-		if anim == "jump":
-			frame = 0 if vel.y < 0.0 else 1
-		elif not move.is_empty():
-			frame = _move_pose_frame(move, move_tick)
 		if _anim_name != anim or sprite.animation != anim:
 			sprite.play(anim)
-		sprite.set_frame_and_progress(frame, 0.0)
+		sprite.set_frame_and_progress(manual_frame, 0.0)
 		_anim_name = anim
 	else:
 		var restart := _anim_name != anim
@@ -799,6 +1110,21 @@ func _update_anim() -> void:
 		sprite.speed_scale = clampf(absf(vel.x) / pace, 0.35, 1.0)
 	else:
 		sprite.speed_scale = 1.0
+
+
+func _throw_pose_frame() -> int:
+	if move_tick < CharacterDB.THROW_STARTUP:
+		return 0
+	if throw_connected:
+		return 1
+	if _throw_released:
+		var release_tick := CharacterDB.THROW_STARTUP + CharacterDB.THROW_TECH_WINDOW
+		return 2 if move_tick < release_tick + 6 else 3
+	if move_tick < CharacterDB.THROW_STARTUP + 6:
+		return 1
+	if move_tick < CharacterDB.THROW_STARTUP + 14:
+		return 2
+	return 3
 
 
 func _move_pose_frame(move_data: Dictionary, tick: int) -> int:
@@ -831,3 +1157,106 @@ func _play_anim(anim: String, restart := false) -> void:
 		sprite.play(anim)
 		if restart:
 			sprite.frame = 0
+
+
+# ---------------------------------------------------------------------------
+# Rollback serialization
+# ---------------------------------------------------------------------------
+
+
+func to_state() -> Dictionary:
+	return {
+		"pos": pos,
+		"vel": vel,
+		"facing": facing,
+		"health": health,
+		"meter": meter,
+		"state": state,
+		"state_tick": state_tick,
+		"airborne": airborne,
+		"crouching": crouching,
+		"blocking": blocking,
+		"walking": walking,
+		"hitstop": hitstop,
+		"stun_ticks": stun_ticks,
+		"invuln": invuln,
+		"flash_ticks": flash_ticks,
+		"armor_flash_ticks": armor_flash_ticks,
+		"move_name": move_name,
+		"move_tick": move_tick,
+		"move_has_hit": move_has_hit,
+		"move_armor_used": move_armor_used,
+		"move_lunged": move_lunged,
+		"move_projectile_spawned": move_projectile_spawned,
+		"knockout": knockout,
+		"landed_flag": landed_flag,
+		"jumped_flag": jumped_flag,
+		"combo_received": combo_received,
+		"pending_knockdown": pending_knockdown,
+		"throw_tech_ticks": throw_tech_ticks,
+		"throw_connected": throw_connected,
+		"_throw_released": _throw_released,
+		"throw_completed_flag": throw_completed_flag,
+		"throw_damage_dealt": throw_damage_dealt,
+		"throw_raw_damage": throw_raw_damage,
+		"teched_flag": teched_flag,
+		"_buf_action": _buf_action,
+		"_buf_ticks": _buf_ticks,
+		"_buf_latched": _buf_latched,
+		"_pose_scale": _pose_scale,
+		"_land_ticks": _land_ticks,
+		"_kick_x": _kick_x,
+		"_kick_span": _kick_span,
+	}
+
+
+func from_state(s: Dictionary) -> void:
+	pos = s["pos"]
+	vel = s["vel"]
+	facing = int(s["facing"])
+	health = float(s["health"])
+	meter = float(s["meter"])
+	state = int(s["state"])
+	state_tick = int(s["state_tick"])
+	airborne = bool(s["airborne"])
+	crouching = bool(s["crouching"])
+	blocking = bool(s["blocking"])
+	walking = bool(s["walking"])
+	hitstop = int(s["hitstop"])
+	stun_ticks = int(s["stun_ticks"])
+	invuln = int(s["invuln"])
+	flash_ticks = int(s["flash_ticks"])
+	armor_flash_ticks = int(s["armor_flash_ticks"])
+	move_name = str(s["move_name"])
+	move_tick = int(s["move_tick"])
+	move_has_hit = bool(s["move_has_hit"])
+	move_armor_used = bool(s["move_armor_used"])
+	move_lunged = bool(s["move_lunged"])
+	move_projectile_spawned = bool(s["move_projectile_spawned"])
+	knockout = bool(s["knockout"])
+	landed_flag = bool(s["landed_flag"])
+	jumped_flag = bool(s["jumped_flag"])
+	combo_received = int(s["combo_received"])
+	pending_knockdown = bool(s["pending_knockdown"])
+	throw_tech_ticks = int(s["throw_tech_ticks"])
+	throw_connected = bool(s["throw_connected"])
+	_throw_released = bool(s.get("_throw_released", false))
+	throw_completed_flag = bool(s["throw_completed_flag"])
+	throw_damage_dealt = float(s["throw_damage_dealt"])
+	throw_raw_damage = float(s["throw_raw_damage"])
+	teched_flag = bool(s["teched_flag"])
+	_buf_action = str(s["_buf_action"])
+	_buf_ticks = int(s["_buf_ticks"])
+	_buf_latched = bool(s["_buf_latched"])
+	_pose_scale = s["_pose_scale"]
+	_land_ticks = int(s["_land_ticks"])
+	_kick_x = float(s["_kick_x"])
+	_kick_span = int(s["_kick_span"])
+
+	if move_name != "" and data.get("moves", {}).has(move_name):
+		move = data["moves"][move_name]
+	else:
+		move = {}
+	events.clear()
+	position = pos
+	_update_visuals(hitstop > 0)

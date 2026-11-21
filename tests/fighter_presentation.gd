@@ -75,8 +75,8 @@ func _check_buffer_window() -> void:
 
 	var expired := _spawn("dave")
 	fired = _buffer_normal(expired, "heavy", total - Fighter.INPUT_BUFFER - 1, "light", 1, total, false)
-	_ok(fired < 0 and expired.move_name == "" and expired.state == Fighter.State.IDLE,
-			"light one tick outside the buffer came out as %s" % expired.move_name)
+	_ok(fired < 0 and expired.move_name == "" and expired.state == Fighter.State.CROUCH and expired.crouching,
+			"light one tick outside the buffer came out as %s (state %s crouch=%s)" % [expired.move_name, expired.state, expired.crouching])
 
 	# A jump buffered on that same edge still jumps when down is held.
 	var jumper := _spawn("dave")
@@ -126,8 +126,8 @@ func _check_hitstop_buffer() -> void:
 	while early.move_name == "heavy" and guard < total:
 		early.tick(_inp(false, false, false, true))
 		guard += 1
-	_ok(early.move_name == "" and early.state == Fighter.State.IDLE,
-			"hitstop extended a light that was already outside the buffer (%s)" % early.move_name)
+	_ok(early.move_name == "" and early.state == Fighter.State.CROUCH and early.crouching,
+			"hitstop extended a light that was already outside the buffer (%s, state %s crouch=%s)" % [early.move_name, early.state, early.crouching])
 
 
 func _check_air_buffer() -> void:

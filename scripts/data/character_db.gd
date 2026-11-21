@@ -7,8 +7,8 @@ extends RefCounted
 ## Hitbox / hurtbox space: origin is between the fighter's feet, +x is "forward"
 ## (the direction the fighter faces). A negative y is up.
 
-const CELL_W := 64
-const CELL_H := 96
+const CELL_W := 192
+const CELL_H := 288
 const SHEET_COLS := 6
 
 const GROUND_Y := 600.0
@@ -19,6 +19,14 @@ const BODY_HALF_WIDTH := 36.0
 const MAX_HEALTH := 1000.0
 const METER_MAX := 100.0
 const METER_COST := 50.0
+
+const THROW_RANGE := 108.0
+const THROW_DAMAGE := 110.0
+const THROW_TECH_WINDOW := 7
+const THROW_STARTUP := 5
+const THROW_RECOVERY := 22
+const WAKEUP_INVULN := 10
+const KNOCKDOWN_TICKS := 26
 
 ## Sprite sheet row layout. Must match tools/gen_art.py.
 const ANIMS := {
@@ -34,6 +42,10 @@ const ANIMS := {
 	"special": {"row": 9, "frames": 6, "fps": 14.0, "loop": false},
 	"win": {"row": 10, "frames": 4, "fps": 8.0, "loop": true},
 	"low": {"row": 11, "frames": 4, "fps": 14.0, "loop": false},
+	"sweep": {"row": 12, "frames": 4, "fps": 14.0, "loop": false},
+	"air": {"row": 13, "frames": 4, "fps": 14.0, "loop": false},
+	"crouch_block": {"row": 14, "frames": 2, "fps": 6.0, "loop": true},
+	"throw": {"row": 15, "frames": 4, "fps": 14.0, "loop": false},
 }
 
 ## Shared normals. Per-character tweaks (below) adjust these.
@@ -45,6 +57,7 @@ const BASE_MOVES := {
 		"hitbox": Rect2(24, -238, 94, 38),
 		"meter_gain": 7.0, "sfx": "swing", "hit_sfx": "hit_light",
 		"lunge": 0.0, "armor": false, "chip": 0.12,
+		"cancel_into": ["heavy", "sweep", "special"], "knockdown": false,
 	},
 	"heavy": {
 		"anim": "heavy", "startup": 11, "active": 4, "recovery": 20,
@@ -53,6 +66,7 @@ const BASE_MOVES := {
 		"hitbox": Rect2(20, -224, 112, 74),
 		"meter_gain": 12.0, "sfx": "swing", "hit_sfx": "hit_heavy",
 		"lunge": 0.0, "armor": false, "chip": 0.12,
+		"cancel_into": ["special"], "knockdown": false,
 	},
 	"low": {
 		"anim": "low", "startup": 6, "active": 3, "recovery": 13,
@@ -61,22 +75,25 @@ const BASE_MOVES := {
 		"hitbox": Rect2(22, -74, 100, 52),
 		"meter_gain": 7.0, "sfx": "swing", "hit_sfx": "hit_light",
 		"lunge": 0.0, "armor": false, "chip": 0.12,
+		"cancel_into": ["heavy", "sweep", "special"], "knockdown": false,
 	},
 	"sweep": {
-		"anim": "low", "startup": 12, "active": 4, "recovery": 22,
+		"anim": "sweep", "startup": 12, "active": 4, "recovery": 22,
 		"damage": 85.0, "hitstun": 16, "blockstun": 12,
 		"knockback": 180.0, "launch": 520.0, "height": "low",
 		"hitbox": Rect2(20, -70, 116, 54),
 		"meter_gain": 12.0, "sfx": "swing", "hit_sfx": "hit_heavy",
 		"lunge": 40.0, "armor": false, "chip": 0.12,
+		"knockdown": true, "cancel_into": [],
 	},
 	"air": {
-		"anim": "heavy", "startup": 5, "active": 8, "recovery": 6,
+		"anim": "air", "startup": 5, "active": 8, "recovery": 6,
 		"damage": 75.0, "hitstun": 18, "blockstun": 11,
 		"knockback": 220.0, "launch": 0.0, "height": "high",
 		"hitbox": Rect2(18, -140, 110, 96),
 		"meter_gain": 10.0, "sfx": "swing", "hit_sfx": "hit_heavy",
 		"lunge": 0.0, "armor": false, "chip": 0.12,
+		"cancel_into": [], "knockdown": false,
 	},
 }
 
@@ -143,11 +160,14 @@ const ROSTER := {
 		"title": "MID-LEVEL MANAGEMENT",
 		"bio": "Three coffees deep and two weeks behind on a report nobody reads. His whole life is a meeting that should have been an email.",
 		"sheet": "res://assets/sprites/fighters/dave.png",
+		"portrait": "res://assets/sprites/portraits/dave.png",
 		"accent": Color("d9b45b"),
+		"alt_tint": Color("6fa8dc"),
 		"stats": {"power": 3, "speed": 3, "defense": 3},
 		"build": {
 			"health": 1000.0, "walk_speed": 235.0, "back_speed": 195.0,
 			"jump_velocity": -1000.0, "damage_scale": 1.0, "weight": 1.0,
+			"throw_range": THROW_RANGE, "throw_damage": THROW_DAMAGE,
 		},
 		"tweaks": {},
 	},
@@ -156,11 +176,14 @@ const ROSTER := {
 		"title": "HOA PRESIDENT",
 		"bio": "Has a clipboard, a group chat, and a strong opinion about your fence height. Will escalate. Already has.",
 		"sheet": "res://assets/sprites/fighters/karen.png",
+		"portrait": "res://assets/sprites/portraits/karen.png",
 		"accent": Color("b07ac0"),
+		"alt_tint": Color("58b8a8"),
 		"stats": {"power": 4, "speed": 2, "defense": 2},
 		"build": {
 			"health": 940.0, "walk_speed": 205.0, "back_speed": 175.0,
 			"jump_velocity": -1020.0, "damage_scale": 0.97, "weight": 0.95,
+			"throw_range": THROW_RANGE, "throw_damage": THROW_DAMAGE,
 		},
 		"tweaks": {},
 	},
@@ -169,11 +192,14 @@ const ROSTER := {
 		"title": "THE LANDLORD",
 		"bio": "Owns the building, the parking spot, and possibly your soul. Carries a plunger for reasons he refuses to explain.",
 		"sheet": "res://assets/sprites/fighters/tony.png",
+		"portrait": "res://assets/sprites/portraits/tony.png",
 		"accent": Color("c49a4e"),
+		"alt_tint": Color("c8685a"),
 		"stats": {"power": 5, "speed": 1, "defense": 4},
 		"build": {
 			"health": 1160.0, "walk_speed": 186.0, "back_speed": 160.0,
 			"jump_velocity": -940.0, "damage_scale": 1.1, "weight": 1.28,
+			"throw_range": 132.0, "throw_damage": 140.0,
 		},
 		"tweaks": {
 			"jab": {"startup": 6, "damage": 50.0},
@@ -185,11 +211,14 @@ const ROSTER := {
 		"title": "UNPAID INTERN",
 		"bio": "Works for exposure. Has a laptop, a hoodie, and the unearned confidence of someone whose parents pay rent.",
 		"sheet": "res://assets/sprites/fighters/chad.png",
+		"portrait": "res://assets/sprites/portraits/chad.png",
 		"accent": Color("6fc0ae"),
+		"alt_tint": Color("e09a4a"),
 		"stats": {"power": 2, "speed": 5, "defense": 2},
 		"build": {
 			"health": 900.0, "walk_speed": 268.0, "back_speed": 225.0,
 			"jump_velocity": -1050.0, "damage_scale": 0.88, "weight": 0.9,
+			"throw_range": THROW_RANGE, "throw_damage": THROW_DAMAGE,
 		},
 		"tweaks": {
 			"jab": {"startup": 4, "recovery": 8},
@@ -219,6 +248,14 @@ static func get_character(id: String) -> Dictionary:
 	return source
 
 
+static func get_fighter_spec(id: String) -> FighterSpec:
+	return FighterSpec.from_dict(get_character(id))
+
+
+static func get_move_spec(id: String, move_name: String) -> MoveSpec:
+	return get_fighter_spec(id).get_move(move_name)
+
+
 static func random_other(id: String) -> String:
 	var pool: Array = ORDER.filter(func(c): return c != id)
 	return pool[randi() % pool.size()]
@@ -226,12 +263,3 @@ static func random_other(id: String) -> String:
 
 static func move_total(move: Dictionary) -> int:
 	return int(move.startup) + int(move.active) + int(move.recovery)
-
-
-static func move_frame_index(tick: int, total: int, frame_count: int) -> int:
-	# Spread the sprite frames evenly across the whole move so animation always
-	# finishes exactly when the move does.
-	if total <= 0 or frame_count <= 0:
-		return 0
-	var f := int(floor(float(tick) / float(total) * float(frame_count)))
-	return clampi(f, 0, frame_count - 1)

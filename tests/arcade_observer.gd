@@ -23,6 +23,7 @@ func _ready() -> void:
 	await _check_versus()
 	await _check_training()
 	await _check_arcade()
+	await _check_arcade_regressions()
 
 	_ok(Harness.normal_save_stamp() == _save_stamp, "mode suite touched the normal save")
 	_report()
@@ -149,6 +150,51 @@ func _check_arcade() -> void:
 			Game.arcade_continue()
 			await _frames(4)
 			_ok(_in_scene(Game.MAIN_MENU), "continuing after a clear should leave the ladder")
+
+
+func _check_arcade_regressions() -> void:
+	# Explicit opponent pick puts that fighter first in a 3-opponent ladder excluding P1.
+	Game.start_arcade()
+	Game.characters_confirmed("dave", "tony", false)
+	var ladder: Array = Game.arcade["ladder"].duplicate()
+	_ok(ladder.size() == 3 and str(ladder[0]) == "tony" and not ladder.has("dave"),
+			"characters_confirmed('dave', 'tony', false) built wrong arcade ladder: %s" % str(ladder))
+
+	# SaveData difficulty setting is reflected in Game.match_config on begin_match().
+	var prev_diff := int(SaveData.settings.get("difficulty", 2))
+	SaveData.settings["difficulty"] = 3
+	Game.stage_id = "breakroom"
+	Game.begin_match()
+	await _frames(4)
+	_ok(int(Game.match_config.get("difficulty", -1)) == 3,
+			"SaveData difficulty 3 was not reflected in Game.match_config (%s)" % str(Game.match_config.get("difficulty", -1)))
+	SaveData.settings["difficulty"] = prev_diff
+
+	# Arcade Draw offers REMATCH (not TRY AGAIN) and preserves ladder index.
+	Game.arcade["index"] = 1
+	Game.arcade["cleared"] = false
+	var draw_index := int(Game.arcade["index"])
+	Game.on_match_end({
+		"mode": "arcade",
+		"p1": "dave",
+		"p2": str(ladder[draw_index]),
+		"stage": "breakroom",
+		"winner": -1,
+		"wins": [1, 1],
+		"best_combo": [0, 0],
+		"damage": [100.0, 100.0],
+		"rounds": 1,
+		"duration": 10.0,
+	})
+	await _frames(4)
+	_ok(_in_scene(Game.RESULTS), "arcade draw did not open RESULTS")
+	_ok(_has_button("REMATCH") and not _has_button("TRY AGAIN"),
+			"arcade draw should offer REMATCH and not TRY AGAIN")
+	_ok(_press("REMATCH"), "could not press REMATCH on arcade draw")
+	await _frames(4)
+	_ok(_in_scene(Game.ARENA), "arcade draw REMATCH did not open ARENA")
+	_ok(int(Game.arcade["index"]) == draw_index,
+			"arcade draw REMATCH changed ladder index (%d -> %d)" % [draw_index, int(Game.arcade["index"])])
 
 
 func _win_round(arena: Arena) -> void:

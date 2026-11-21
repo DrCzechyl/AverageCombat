@@ -15,13 +15,13 @@ const KEYMAP := {
 	"p1": {
 		"left": [KEY_A], "right": [KEY_D], "up": [KEY_W], "down": [KEY_S],
 		"light": [KEY_F], "heavy": [KEY_G], "special": [KEY_H], "block": [KEY_V],
-		"confirm": [KEY_ENTER],
+		"throw": [KEY_E], "confirm": [KEY_ENTER],
 	},
 	"p2": {
 		"left": [KEY_LEFT], "right": [KEY_RIGHT], "up": [KEY_UP], "down": [KEY_DOWN],
 		"light": [KEY_KP_1, KEY_COMMA], "heavy": [KEY_KP_2, KEY_PERIOD],
 		"special": [KEY_KP_3, KEY_SLASH], "block": [KEY_KP_0, KEY_APOSTROPHE],
-		"confirm": [KEY_KP_ENTER],
+		"throw": [KEY_KP_4, KEY_SEMICOLON], "confirm": [KEY_KP_ENTER],
 	},
 }
 
@@ -30,6 +30,7 @@ const PAD_BUTTONS := {
 	"heavy": JOY_BUTTON_B,
 	"special": JOY_BUTTON_X,
 	"block": JOY_BUTTON_Y,
+	"throw": JOY_BUTTON_RIGHT_SHOULDER,
 }
 
 const PAD_DIRS := {
@@ -37,8 +38,12 @@ const PAD_DIRS := {
 	"up": [JOY_BUTTON_DPAD_UP], "down": [JOY_BUTTON_DPAD_DOWN],
 }
 
+const REBINDABLE_ACTIONS := [
+	"left", "right", "up", "down", "light", "heavy", "special", "block", "throw",
+]
+
 const ACTIONS := [
-	"left", "right", "up", "down", "light", "heavy", "special", "block", "confirm",
+	"left", "right", "up", "down", "light", "heavy", "special", "block", "throw", "confirm",
 ]
 
 
@@ -47,13 +52,20 @@ func _ready() -> void:
 
 
 func setup() -> void:
+	var saved_binds: Variant = SaveData.settings.get("keybinds", {}) if SaveData != null else {}
+	var keybinds: Dictionary = saved_binds if saved_binds is Dictionary else {}
 	for p in ["p1", "p2"]:
 		for action in ACTIONS:
 			var name := "%s_%s" % [p, action]
 			if InputMap.has_action(name):
 				InputMap.erase_action(name)
 			InputMap.add_action(name, 0.35)
-			for key in KEYMAP[p].get(action, []):
+			var keys: Array = KEYMAP[p].get(action, [])
+			if action in REBINDABLE_ACTIONS and keybinds.has(name):
+				var override: Variant = keybinds[name]
+				if override is int and int(override) > 0:
+					keys = [int(override)]
+			for key in keys:
 				var ev := InputEventKey.new()
 				ev.physical_keycode = key
 				InputMap.action_add_event(name, ev)
@@ -128,3 +140,25 @@ func _ensure_action(name: String, keys: Array) -> void:
 		var ev := InputEventKey.new()
 		ev.physical_keycode = key
 		InputMap.action_add_event(name, ev)
+
+
+func rebind_key(action: String, keycode: int) -> void:
+	SaveData.set_keybind(action, keycode)
+	setup()
+
+
+func reset_keybinds() -> void:
+	SaveData.reset_keybinds()
+	setup()
+
+
+func key_label(action: String) -> String:
+	if not InputMap.has_action(action):
+		return "---"
+	for ev in InputMap.action_get_events(action):
+		if ev is InputEventKey:
+			var k := ev as InputEventKey
+			var code: Key = k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
+			if code != KEY_NONE:
+				return OS.get_keycode_string(code)
+	return "---"

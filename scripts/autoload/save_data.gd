@@ -15,10 +15,17 @@ const DEFAULT_SETTINGS := {
 	"volume": 0.8,
 	"difficulty": 2,
 	"screen_shake": true,
+	"shake_scale": 1.0,
 	"hitstop": true,
 	"show_hitboxes": false,
 	"fullscreen": false,
+	"colorblind_hud": false,
+	"keybinds": {},
 }
+
+const REBINDABLE_SUFFIXES := [
+	"left", "right", "up", "down", "light", "heavy", "special", "block", "throw",
+]
 
 const DEFAULT_STATS := {
 	"matches": 0,
@@ -67,9 +74,24 @@ func load_game() -> void:
 	settings["volume"] = clampf(volume, 0.0, 1.0)
 	var difficulty := _read_number(cfg, "settings", "difficulty", DEFAULT_SETTINGS["difficulty"])
 	settings["difficulty"] = int(clampf(difficulty, 1.0, 3.0))
-	for key in ["screen_shake", "hitstop", "show_hitboxes", "fullscreen"]:
+	for key in ["screen_shake", "hitstop", "show_hitboxes", "fullscreen", "colorblind_hud"]:
 		var value: Variant = cfg.get_value("settings", key, DEFAULT_SETTINGS[key])
 		settings[key] = value if value is bool else DEFAULT_SETTINGS[key]
+
+	var has_shake_scale := cfg.has_section_key("settings", "shake_scale")
+	var shake_fallback := 0.0 if (not has_shake_scale and not bool(settings["screen_shake"])) else float(DEFAULT_SETTINGS["shake_scale"])
+	var shake_scale := _read_number(cfg, "settings", "shake_scale", shake_fallback)
+	settings["shake_scale"] = clampf(shake_scale, 0.0, 1.0)
+
+	var valid_binds: Dictionary = {}
+	var raw_binds: Variant = cfg.get_value("settings", "keybinds", {})
+	if raw_binds is Dictionary:
+		for bind_key in raw_binds:
+			if bind_key is String and _is_valid_rebind_action(bind_key):
+				var bind_val: Variant = raw_binds[bind_key]
+				if bind_val is int and int(bind_val) > 0:
+					valid_binds[bind_key] = int(bind_val)
+	settings["keybinds"] = valid_binds
 
 	for key in ["matches", "wins", "best_combo", "arcade_clears"]:
 		var value: Variant = cfg.get_value("stats", key, DEFAULT_STATS[key])
@@ -123,8 +145,38 @@ func _apply_fullscreen() -> void:
 
 func set_setting(key: String, value) -> void:
 	settings[key] = value
+	if key == "screen_shake":
+		if not bool(value):
+			settings["shake_scale"] = 0.0
+		elif float(settings.get("shake_scale", 0.0)) <= 0.01:
+			settings["shake_scale"] = 1.0
+	elif key == "shake_scale":
+		var clamped := clampf(float(value), 0.0, 1.0)
+		settings["shake_scale"] = clamped
+		settings["screen_shake"] = clamped > 0.01
 	apply_settings()
 	save_game()
+
+
+func set_keybind(action: String, keycode: int) -> void:
+	if not _is_valid_rebind_action(action) or keycode <= 0:
+		return
+	var binds: Variant = settings.get("keybinds", {})
+	var next_binds: Dictionary = binds.duplicate() if binds is Dictionary else {}
+	next_binds[action] = keycode
+	settings["keybinds"] = next_binds
+	save_game()
+
+
+func reset_keybinds() -> void:
+	settings["keybinds"] = {}
+	save_game()
+
+
+func _is_valid_rebind_action(action: String) -> bool:
+	if not (action.begins_with("p1_") or action.begins_with("p2_")):
+		return false
+	return action.substr(3) in REBINDABLE_SUFFIXES
 
 
 func record_match(player_won: bool, best_combo: int, damage: float) -> void:

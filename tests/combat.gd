@@ -22,6 +22,12 @@ func _ready() -> void:
 	await _check_hitstop_exchange()
 	await _check_fight_cue()
 	await _check_reset_is_training_only()
+	await _check_air_attack_drift()
+	await _check_special_hurtbox_and_air_lock()
+	await _check_blockstun_and_guard_gaps()
+	await _check_hitstop_free_buffer()
+	await _check_counter_hit_clears_move()
+	await _check_quantize_and_accumulator()
 	_report()
 
 
@@ -583,6 +589,176 @@ func _press_reset(arena: Arena) -> void:
 	event.action = "reset_round"
 	event.pressed = true
 	arena._unhandled_input(event)
+
+
+func _inp(dir := 0, jump := false, crouch := false, light := false, heavy := false,
+		special := false, block := false) -> Dictionary:
+	return {
+		"dir": dir,
+		"jump": jump,
+		"crouch": crouch,
+		"light": light,
+		"heavy": heavy,
+		"special": special,
+		"block": block,
+	}
+
+
+func _check_air_attack_drift() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var dave := arena.p1
+	dave.pos = Vector2(480.0, CharacterDB.GROUND_Y - 220.0)
+	dave.position = dave.pos
+	dave.vel = Vector2(200.0, -300.0)
+	dave.airborne = true
+	dave.state = Fighter.State.AIR
+	dave.start_move("air")
+	for _i in 6:
+		dave.tick(_inp())
+	_ok(dave.airborne and dave.state == Fighter.State.ATTACK and dave.move_name == "air",
+			"air attack ended early while still airborne (state %s move %s)" % [dave.state, dave.move_name])
+	_ok(is_equal_approx(dave.vel.x, 200.0),
+			"air attack braked horizontal drift (vel.x %.2f, expected 200.0)" % dave.vel.x)
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_special_hurtbox_and_air_lock() -> void:
+	var arena := await _make_arena("dave", "karen")
+	_place(arena.p1, arena.p2, 600.0, 700.0)
+	var dave := arena.p1
+	var karen := arena.p2
+	dave.state = Fighter.State.CROUCH
+	dave.crouching = true
+	dave.meter = CharacterDB.METER_MAX
+	dave.tick(_inp(0, false, true, false, false, true, false))
+	var expected_hb := Rect2(CharacterDB.BASE_HURTBOX.position + dave.pos, CharacterDB.BASE_HURTBOX.size)
+	_ok(dave.move_name == "special" and not dave.crouching,
+			"crouching special did not rise into standing stance (move %s crouch=%s)" % [dave.move_name, dave.crouching])
+	_ok(dave.hurtbox().is_equal_approx(expected_hb),
+			"standing special hurtbox %s did not match BASE_HURTBOX %s" % [dave.hurtbox(), expected_hb])
+	_prime(karen, "jab")
+	var hit := karen.active_hit()
+	_ok(not hit.is_empty() and hit["rect"].intersects(dave.hurtbox()),
+			"standing opponent jab missed Dave's standing special hurtbox")
+
+	# Mid-air special must not start even with full meter.
+	dave._move_clear()
+	dave.pos = Vector2(480.0, CharacterDB.GROUND_Y - 180.0)
+	dave.position = dave.pos
+	dave.vel = Vector2(0.0, -200.0)
+	dave.airborne = true
+	dave.crouching = false
+	dave.state = Fighter.State.AIR
+	dave.meter = CharacterDB.METER_MAX
+	dave.tick(_inp(0, false, false, false, false, true, false))
+	_ok(dave.move_name == "" and dave.state == Fighter.State.AIR
+			and is_equal_approx(dave.meter, CharacterDB.METER_MAX),
+			"mid-air special started while airborne (move %s state %s meter %.1f)" % [dave.move_name, dave.state, dave.meter])
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_blockstun_and_guard_gaps() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var def := arena.p2
+	def.state = Fighter.State.BLOCKSTUN
+	def.stun_ticks = 2
+	def.blocking = true
+	def.crouching = false
+	def.airborne = false
+
+	# Tick 1: still in BLOCKSTUN, switches to crouching guard immediately.
+	def.tick(_inp(0, false, true, false, false, false, true))
+	_ok(def.state == Fighter.State.BLOCKSTUN and def.stun_ticks == 1
+			and def.crouching and def.blocking and def.is_guarding("low"),
+			"blockstun did not allow switching to crouch guard (state %s crouch=%s block=%s)" % [def.state, def.crouching, def.blocking])
+
+	# Tick 2: stun_ticks reaches 0 -> exits directly into CROUCH with active guard (no gap).
+	def.tick(_inp(0, false, true, false, false, false, true))
+	_ok(def.state == Fighter.State.CROUCH and def.crouching and def.blocking and def.is_guarding("low"),
+			"leaving blockstun created a guard gap (state %s crouch=%s block=%s)" % [def.state, def.crouching, def.blocking])
+
+	# Exiting ATTACK recovery while holding block sets blocking immediately on the same tick.
+	var attacker := arena.p1
+	attacker.start_move("jab")
+	attacker.move_tick = CharacterDB.move_total(attacker.move) - 1
+	attacker.blocking = false
+	attacker.tick(_inp(0, false, false, false, false, false, true))
+	_ok(attacker.state == Fighter.State.IDLE and attacker.move_name == ""
+			and attacker.blocking and attacker.is_guarding("high"),
+			"exiting attack recovery while holding block left a guard gap (state %s block=%s)" % [attacker.state, attacker.blocking])
+
+	# Landing from AIR while holding block sets blocking immediately on the landing tick.
+	attacker.pos = Vector2(480.0, CharacterDB.GROUND_Y - 4.0)
+	attacker.position = attacker.pos
+	attacker.vel = Vector2(0.0, 500.0)
+	attacker.airborne = true
+	attacker.blocking = false
+	attacker.crouching = false
+	attacker.state = Fighter.State.AIR
+	attacker.tick(_inp(0, false, false, false, false, false, true))
+	_ok(attacker.landed_flag and not attacker.airborne and attacker.state == Fighter.State.IDLE
+			and attacker.blocking and attacker.is_guarding("mid"),
+			"landing from AIR while holding block left a guard gap (state %s block=%s)" % [attacker.state, attacker.blocking])
+
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_hitstop_free_buffer() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var karen := arena.p2
+	karen.state = Fighter.State.IDLE
+	karen.hitstop = 4
+	karen.tick(_inp(0, false, false, true))
+	for _i in 3:
+		karen.tick(_inp())
+	_ok(karen.hitstop == 0 and karen.move_name == "",
+			"buffered light fired before hitstop ended (hitstop %d move %s)" % [karen.hitstop, karen.move_name])
+	karen.tick(_inp())
+	_ok(karen.state == Fighter.State.ATTACK and karen.move_name == "jab",
+			"hitstop ate a light input pressed in IDLE (state %s move %s)" % [karen.state, karen.move_name])
+
+	for non_free in [Fighter.State.INTRO, Fighter.State.WIN]:
+		karen._move_clear()
+		karen._clear_buffer()
+		karen.state = non_free
+		karen.hitstop = 2
+		karen.tick(_inp(0, false, false, true))
+		_ok(karen._buf_action == "" and karen._buf_ticks == 0,
+				"non-free state %s buffered an attack during hitstop (%s)" % [non_free, karen._buf_action])
+
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_counter_hit_clears_move() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var dave := arena.p1
+	dave.start_move("heavy")
+	dave.move_tick = 5
+	dave.move_armor_used = true
+	var res := dave.take_hit({"damage": 50.0, "hitstun": 12, "knockback": 100.0}, false, -1, 1.0)
+	_ok(not bool(res["ko"]) and dave.state == Fighter.State.HITSTUN,
+			"non-lethal counter-hit did not enter HITSTUN (state %s ko=%s)" % [dave.state, res["ko"]])
+	_ok(dave.move.is_empty() and dave.move_name == "" and dave.move_tick == 0 and not dave.move_armor_used,
+			"counter-hit left stale move state (name=%s tick=%d armor=%s)" % [dave.move_name, dave.move_tick, dave.move_armor_used])
+	arena.queue_free()
+	await get_tree().process_frame
+
+
+func _check_quantize_and_accumulator() -> void:
+	var arena := await _make_arena("dave", "karen")
+	var q := arena._quantize_px(Vector2(10.33, 599.6))
+	_ok(q.is_equal_approx(Vector2(10.0, 600.0)),
+			"_quantize_px did not round to whole pixels (got %s)" % str(q))
+	arena._accum = 0.0
+	arena._physics_process(2.0)
+	_ok(arena._accum <= Arena.TICK and arena._accum >= 0.0,
+			"_physics_process(2.0) left unbounded accumulator debt (%.5f)" % arena._accum)
+	arena.queue_free()
+	await get_tree().process_frame
 
 
 func _stop_sfx() -> void:

@@ -18,7 +18,7 @@ const NORMAL_WEIGHTS := {
 }
 
 var level := 2
-var behavior := "fight"  # "fight" | "dummy"
+var behavior := "fight"  # "fight" | "dummy" | "dummy_crouch" | "dummy_block" | "dummy_jump"
 
 var _rng := RandomNumberGenerator.new()
 var _tick := 0
@@ -42,10 +42,38 @@ func _init(ai_level := 2, ai_behavior := "fight") -> void:
 		3: _interval = 7
 
 
+func reset() -> void:
+	_tick = 0
+	_dir = 0
+	_crouch = false
+	_block_ticks = 0
+	_crouch_block = false
+	_attack_cd = 0
+	_retreat_ticks = 0
+	_pending.clear()
+
+
 func decide(me: Fighter, foe: Fighter) -> Dictionary:
 	var out := InputRouter.blank()
-	if behavior == "dummy" or foe == null or me.knockout:
+	if foe == null or me.knockout:
 		return out
+	match behavior:
+		"dummy":
+			return out
+		"dummy_crouch":
+			out["crouch"] = true
+			return out
+		"dummy_block":
+			if foe.is_attacking():
+				out["block"] = true
+				if str(foe.move.get("height", "mid")) == "low":
+					out["crouch"] = true
+			return out
+		"dummy_jump":
+			_tick += 1
+			if _tick % 50 == 1 and not me.airborne:
+				out["jump"] = true
+			return out
 
 	_tick += 1
 	_attack_cd = maxi(0, _attack_cd - 1)
@@ -103,8 +131,31 @@ func _think(me: Fighter, foe: Fighter, dist: float, toward: int) -> void:
 			_pending["light"] = true
 		return
 
+	var throw_range := float(me.data.get("build", {}).get("throw_range", CharacterDB.THROW_RANGE))
+	if dist <= throw_range and not foe.airborne and foe.blocking \
+			and _attack_cd <= 0 and _rng.randf() < 0.25:
+		_pending["throw"] = true
+		_dir = 0
+		_attack_cd = [42, 34, 24][level - 1]
+		return
+
 	var reachable := _reachable_normals(me, foe)
 	if reachable.is_empty():
+		if _attack_cd <= 0 and me.meter >= CharacterDB.METER_COST:
+			var special: Dictionary = me.data.get("moves", {}).get("special", {})
+			if special.has("projectile"):
+				if dist >= 160.0 and dist <= 720.0 and _rng.randf() < 0.28:
+					_dir = 0
+					_pending["special"] = true
+					_attack_cd = [46, 38, 30][level - 1] + _rng.randi_range(0, 12)
+					return
+			elif float(special.get("lunge", 0.0)) > 0.0:
+				var lunge := float(special.get("lunge", 0.0))
+				if dist >= 110.0 and dist <= 165.0 + lunge and _rng.randf() < 0.22:
+					_dir = 0
+					_pending["special"] = true
+					_attack_cd = [46, 38, 30][level - 1] + _rng.randi_range(0, 12)
+					return
 		_dir = toward
 		if dist > 300.0 and dist < 520.0 and _rng.randf() < 0.12:
 			_pending["jump"] = true

@@ -7,13 +7,13 @@
 script = ExtResource("1_fighter")
 
 [node name="Shadow" type="Sprite2D" parent="."]
-texture_filter = 1
+texture_filter = 2
 position = Vector2(0, -6)
 scale = Vector2(2.2, 1)
 texture = ExtResource("2_shadow")
 modulate = Color(1, 1, 1, 0.55)
 
 [node name="Sprite" type="AnimatedSprite2D" parent="."]
-texture_filter = 1
-offset = Vector2(0, -47)
-scale = Vector2(3, 3)
+texture_filter = 2
+offset = Vector2(0, -141)
+scale = Vector2(1, 1)

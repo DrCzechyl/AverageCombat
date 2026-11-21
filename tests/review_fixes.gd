@@ -39,10 +39,15 @@ func _run() -> void:
 	get_tree().paused = false
 	await _goto_blank()
 	await _check_pad_heavy()
+	await _check_pad_resume_and_pause_safety()
+	await _release_all()
+	get_tree().paused = false
+	await _goto_blank()
 	await _check_intro_edges()
 	await _check_reset_edges()
 	await _check_clipboard()
 	await _check_ai_spacing()
+	await _check_ai_reset_hitstop_and_zoning()
 
 
 func _check_bindings() -> void:
@@ -173,6 +178,16 @@ func _check_picker_back() -> void:
 	get_tree().change_scene_to_file(Game.CHAR_SELECT)
 	await _frames(4)
 	_ok(_scene_is(Game.CHAR_SELECT), "character select did not open for pad back")
+	var select := get_tree().current_scene
+	if select != null:
+		await _tap_joy(0, JOY_BUTTON_A)
+		await _frames(2)
+		_ok(_scene_is(Game.CHAR_SELECT) and bool(select.locked[0]) and not bool(select.locked[1]),
+				"P1 lock did not leave locked=[true, false] before cancel (locked=%s)" % str(select.locked))
+		await _tap_joy(0, JOY_BUTTON_B)
+		await _frames(2)
+		_ok(_scene_is(Game.CHAR_SELECT) and not bool(select.locked[0]) and not bool(select.locked[1]),
+				"pad B while P1 locked did not unlock on CHAR_SELECT (scene %s locked=%s)" % [_scene_path(), str(select.locked)])
 	await _tap_joy(0, JOY_BUTTON_B)
 	await _frames(4)
 	_ok(_scene_is(Game.MAIN_MENU), "pad B did not back out of character select (at %s)" % _scene_path())
@@ -183,6 +198,14 @@ func _check_picker_back() -> void:
 	get_tree().change_scene_to_file(Game.STAGE_SELECT)
 	await _frames(4)
 	_ok(_scene_is(Game.STAGE_SELECT), "stage select did not open for pad back")
+	var stage_hint: Label = null
+	if get_tree().current_scene != null:
+		for node in get_tree().current_scene.find_children("", "Label", true, false):
+			if node is Label and (node as Label).text.contains("ESC: BACK"):
+				stage_hint = node as Label
+				break
+	_ok(stage_hint != null and stage_hint.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER,
+			"stage select bottom hint is missing or not centered")
 	await _tap_joy(1, JOY_BUTTON_B)
 	await _frames(4)
 	_ok(_scene_is(Game.CHAR_SELECT), "pad B did not back out of stage select (at %s)" % _scene_path())
@@ -211,6 +234,91 @@ func _check_pad_heavy() -> void:
 	_ok(arena.p2.state == Fighter.State.ATTACK and arena.p2.move_name == "heavy",
 			"pad B during a match did not throw P2 heavy (state %s %s)" % [arena.p2.state, arena.p2.move_name])
 	await _tick([_joy_event(1, JOY_BUTTON_B, false)])
+	arena.queue_free()
+	await _frames(2)
+
+
+func _check_pad_resume_and_pause_safety() -> void:
+	var arena := await _spawn_arena("dave", "karen", "versus")
+	arena.process_mode = Node.PROCESS_MODE_PAUSABLE
+	arena._enter_fight()
+	arena._accum = 0.0
+	arena.pause_menu.open()
+	_ok(get_tree().paused and arena.pause_menu.visible, "pause_menu.open() did not pause in FIGHT")
+	await _tick([_joy_event(0, JOY_BUTTON_A, true), _joy_event(0, JOY_BUTTON_A, false)])
+	await _tick()
+	await _tick()
+	_ok(not get_tree().paused and not arena.pause_menu.visible,
+			"pad A did not close pause menu from RESUME")
+	_ok(arena.p1.move_name.is_empty(),
+			"resuming pause with pad A leaked an attack (%s)" % arena.p1.move_name)
+	await _tick([_joy_event(0, JOY_BUTTON_A, true)])
+	await _tick()
+	_ok(arena.p1.state == Fighter.State.ATTACK and arena.p1.move_name == "jab",
+			"second pad A after resume did not throw jab (state %s %s)" % [arena.p1.state, arena.p1.move_name])
+	await _tick([_joy_event(0, JOY_BUTTON_A, false)])
+
+	# Finished arena must refuse pause_menu.open().
+	arena.finished = true
+	arena.pause_menu.open()
+	_ok(not arena.pause_menu.visible and not get_tree().paused,
+			"pause_menu.open() paused a finished arena")
+	arena.queue_free()
+	await _frames(2)
+
+	# Game.goto() must always clear get_tree().paused.
+	get_tree().paused = true
+	Game.goto(Game.MAIN_MENU)
+	await _frames(3)
+	_ok(not get_tree().paused and _scene_is(Game.MAIN_MENU),
+			"Game.goto() did not clear tree pause or load destination")
+
+
+func _check_ai_reset_hitstop_and_zoning() -> void:
+	var ctrl := AIController.new(2, "fight")
+	ctrl._attack_cd = 25
+	ctrl._block_ticks = 14
+	ctrl._retreat_ticks = 18
+	ctrl._pending = {"special": true}
+	ctrl.reset()
+	_ok(ctrl._attack_cd == 0 and ctrl._block_ticks == 0
+			and ctrl._retreat_ticks == 0 and ctrl._pending.is_empty(),
+			"AIController.reset() did not clear timers and pending actions")
+
+	var arena := await _spawn_arena("dave", "karen", "versus", true, 3)
+	_park_spacing(arena, 220.0)
+	var before_ai_tick := arena.ai._tick
+	arena.p1.hitstop = 3
+	arena._step_fight()
+	_ok(arena.ai._tick == before_ai_tick,
+			"AI tick advanced during hitstop (%d -> %d)" % [before_ai_tick, arena.ai._tick])
+	arena.p1.hitstop = 0
+
+	# Karen AI (level 3) with full meter at 360px zoning range throws special outside melee reach.
+	_park_spacing(arena, 360.0)
+	arena.p1.pos = Vector2(400.0, CharacterDB.GROUND_Y)
+	arena.p2.pos = Vector2(760.0, CharacterDB.GROUND_Y)
+	arena.p1.position = arena.p1.pos
+	arena.p2.position = arena.p2.pos
+	arena.p2.meter = CharacterDB.METER_MAX
+	arena.ai.reset()
+	arena.ai._rng.seed = 7
+	var threw_special := false
+	var threw_outside_melee := false
+	for _i in 90:
+		arena._step()
+		if arena.p2.state == Fighter.State.ATTACK and arena.p2.move_name == "special":
+			threw_special = true
+			var in_melee := false
+			for move_name in AIController.GROUND_NORMALS:
+				if arena.ai.move_reaches(arena.p2, arena.p1, move_name):
+					in_melee = true
+					break
+			threw_outside_melee = not in_melee
+			break
+	_ok(threw_special and threw_outside_melee,
+			"Karen AI did not throw special from zoning range (special=%s outside_melee=%s gap=%.1f)" % [
+				threw_special, threw_outside_melee, absf(arena.p2.pos.x - arena.p1.pos.x)])
 	arena.queue_free()
 	await _frames(2)
 

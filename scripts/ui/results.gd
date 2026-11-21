@@ -19,7 +19,7 @@ func _ready() -> void:
 	cleared = bool(Game.arcade.get("cleared", false))
 
 	var bg := StageDB.get_stage(str(result.get("stage", "breakroom")))
-	UI.backdrop(self, str(bg["bg"]), Color(0.24, 0.26, 0.34), 0.74)
+	UI.backdrop(self, str(bg["bg"]), Color(0.28, 0.30, 0.36), 0.72)
 
 	_build_header()
 	_build_winner()
@@ -30,9 +30,8 @@ func _ready() -> void:
 
 
 func _build_header() -> void:
-	var label := "TRAINING COMPLETE" if mode == "training" else "MATCH RESULT"
-	UI.banner(self, label, 26, 22, UITheme.MUTED)
-	UI.rule(self, Vector2(440, 68), 400, UITheme.ACCENT, 3)
+	UI.banner(self, "MATCH RESULT", 26, 22, UITheme.MUTED)
+	UI.rule(self, Vector2(440, 68), 400, UITheme.ACCENT, 2)
 
 
 func _build_winner() -> void:
@@ -40,10 +39,7 @@ func _build_winner() -> void:
 	var subtitle := ""
 	var color := UITheme.ACCENT
 
-	if mode == "training":
-		title = "GOOD SESSION"
-		subtitle = "Nobody wins in training. That is the point."
-	elif mode == "arcade" and cleared:
+	if mode == "arcade" and cleared:
 		title = "ARCADE CLEARED"
 		subtitle = "The whole ladder. Every last one of them."
 		color = UITheme.OK
@@ -62,14 +58,37 @@ func _build_winner() -> void:
 		title = "%s WINS" % _name(str(result.get("p2", "karen")))
 		subtitle = "Better luck next quarter."
 
-	UI.banner(self, title, 96, 78, color, UITheme.heading_font)
-	UI.banner(self, subtitle, 190, 20, UITheme.MUTED)
+	UI.banner(self, title, 92, 76, color, UITheme.heading_font)
+	UI.banner(self, subtitle, 186, 20, UITheme.MUTED)
 
-	# Winner portrait in the center. A draw is not a player 2 victory.
+	# Winner portrait framed in a sleek dark-bordered card. A draw is not a player 2 victory.
 	var winner_id := str(result.get("p1", "dave")) if (p1_won or winner < 0) else str(result.get("p2", "karen"))
 	if mode == "arcade" and not p1_won and winner >= 0:
 		winner_id = str(result.get("p2", "karen"))
-	UI.portrait(self, winner_id, Rect2(560, 224, 160, 240), 0, 0)
+
+	var frame_rect := Rect2(552, 222, 176, 236)
+	var frame := Panel.new()
+	frame.position = frame_rect.position
+	frame.size = frame_rect.size
+	frame.add_theme_stylebox_override("panel",
+			UI.panel_style(Color(0.065, 0.08, 0.11, 0.94), color, 2, 2))
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(frame)
+
+	var portrait_rect := Rect2(frame_rect.position.x + 6, frame_rect.position.y + 6,
+			frame_rect.size.x - 12, frame_rect.size.y - 12)
+	var portrait := UI.portrait(self, winner_id, portrait_rect, 0, 0)
+	portrait.clip_contents = true
+
+	var fade := ColorRect.new()
+	fade.position = Vector2(portrait_rect.position.x, portrait_rect.end.y - 32)
+	fade.size = Vector2(portrait_rect.size.x, 32)
+	fade.color = Color(0.04, 0.05, 0.08, 0.65)
+	fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(fade)
+
+	UI.rule(self, Vector2(portrait_rect.position.x, portrait_rect.end.y - 2),
+			portrait_rect.size.x, Color(color.r, color.g, color.b, 0.8), 2.0)
 
 
 func _build_stats() -> void:
@@ -85,10 +104,12 @@ func _build_stats() -> void:
 		["MATCH TIME", UI.fmt_seconds(seconds)],
 	]
 	UI.panel(self, Rect2(400, 470, 480, 142), UITheme.BORDER, 2)
+	UI.rule(self, Vector2(402, 470), 476,
+			Color(UITheme.ACCENT.r, UITheme.ACCENT.g, UITheme.ACCENT.b, 0.7), 2)
 	var y := 492.0
 	for row in rows:
 		UI.label(self, str(row[0]), Vector2(432, y), 16, UITheme.MUTED)
-		var value := UI.label(self, str(row[1]), Vector2(0, y), 18, UITheme.INK)
+		var value := UI.label(self, str(row[1]), Vector2(0, y), 18, UITheme.INK, UITheme.heading_font)
 		value.size = Vector2(848, 24)
 		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		y += 26.0
@@ -107,6 +128,9 @@ func _build_buttons() -> void:
 	elif mode == "arcade" and not cleared and p1_won:
 		labels = ["NEXT OPPONENT", "QUIT TO MENU"]
 		actions = ["next", "menu"]
+	elif mode == "arcade" and not cleared and winner < 0:
+		labels = ["REMATCH", "QUIT TO MENU"]
+		actions = ["rematch", "menu"]
 	elif mode == "arcade":
 		labels = ["TRY AGAIN", "QUIT TO MENU"]
 		actions = ["retry", "menu"]
@@ -140,3 +164,10 @@ func _on_action(action: String) -> void:
 func _name(id: String) -> String:
 	var data := CharacterDB.get_character(id)
 	return str(data.get("name", id.to_upper()))
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		Sfx.play_ui("back")
+		Game.go_main_menu()
+		accept_event()

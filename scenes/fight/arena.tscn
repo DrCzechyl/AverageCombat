@@ -8,7 +8,7 @@
 script = ExtResource("1_arena")
 
 [node name="Background" type="Sprite2D" parent="."]
-texture_filter = 1
+texture_filter = 2
 position = Vector2(640, 360)
 
 [node name="Fighters" type="Node2D" parent="."]

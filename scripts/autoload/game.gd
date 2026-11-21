@@ -34,6 +34,7 @@ func _ready() -> void:
 
 
 func goto(path: String) -> void:
+	get_tree().paused = false
 	get_tree().change_scene_to_file(path)
 
 
@@ -87,7 +88,12 @@ func characters_confirmed(new_p1: String, new_p2: String, versus: bool) -> void:
 		p2_id = new_p2
 	elif mode == "arcade":
 		# The ladder is built from the *chosen* fighter, not the previous pick.
-		arcade["ladder"] = _pick_ladder(p1_id)
+		if new_p2 != "" and new_p2 != p1_id and CharacterDB.ROSTER.has(new_p2):
+			var rest: Array = CharacterDB.ORDER.filter(func(c): return c != p1_id and c != new_p2)
+			rest.shuffle()
+			arcade["ladder"] = [new_p2] + rest
+		else:
+			arcade["ladder"] = _pick_ladder(p1_id)
 		arcade["index"] = 0
 		arcade["cleared"] = false
 		p2_id = arcade["ladder"][0]
@@ -120,6 +126,7 @@ func begin_match() -> void:
 			return
 		p2_id = arcade["ladder"][arcade["index"]]
 		p2_is_ai = true
+	difficulty = int(SaveData.settings.get("difficulty", difficulty))
 	match_config = {
 		"mode": mode,
 		"p1": p1_id,
